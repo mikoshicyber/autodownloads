@@ -1,0 +1,6 @@
+{
+  "url": "https://www.heidisql.com/download.php?download=installer",
+  "type": 1,
+  "rules": ["HeidiSQL_[\\d.]+_Setup.exe$"],
+  "tail": 1
+}

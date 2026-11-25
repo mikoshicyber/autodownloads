@@ -1,0 +1,8 @@
+{
+  "url": "https://www.wireshark.org/download.html",
+  "rules": [
+    "Wireshark-[\\d.]+-x64.exe"
+  ],
+  "type": 1,
+  "tail": 1
+}

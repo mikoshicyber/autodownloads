@@ -1,0 +1,5 @@
+{
+  "url": "https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/latest",
+  "type": 1,
+  "rules": ["gs[\\d]+w64.exe","gs[\\d]+w32.exe"]
+}

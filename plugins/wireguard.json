@@ -1,0 +1,6 @@
+{
+  "url": "https://download.wireguard.com/windows-client/wireguard-installer.exe",
+  "rules": ["wireguard-installer.exe"],
+  "type": 0,
+  "tail": 1
+}

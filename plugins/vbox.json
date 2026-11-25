@@ -1,0 +1,6 @@
+{
+  "url": "https://www.virtualbox.org/wiki/Downloads",
+  "type": 1,
+  "rules": ["VirtualBox-[\\d.]+-[\\d]+-Win.exe","Oracle_VirtualBox_Extension_Pack-[\\d.-a]+.vbox-extpack"],
+  "tail": 2
+}

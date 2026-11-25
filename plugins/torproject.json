@@ -1,0 +1,13 @@
+{
+    "url": "https://download.torproject.org/tor-browser-for-desktop/",
+    "type": 1,
+    "rules": [
+        "torbrowser-install-win64-[\\d.]+_ALL.exe$",
+        "tor-browser-windows-x86_64-portable-[\\d.]+.exe$"
+    ],
+    "tail": 1,
+    "proxy": {
+        "all": "http://127.0.0.1:1080",
+        "no_proxy": "localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16"
+    }
+}

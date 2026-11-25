@@ -1,0 +1,8 @@
+{
+  "url": "https://github.com/rustdesk/rustdesk/releases/latest",
+  "type": 1,
+  "rules": [
+    "rustdesk-[\\d.-]+-x86_64.msi", "rustdesk-[\\d.-]+-x86_64.exe"
+  ],
+  "tail": 2
+}

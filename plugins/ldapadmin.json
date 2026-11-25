@@ -1,0 +1,6 @@
+{
+  "url": "https://www.ldapadministrator.com/download.htm",
+  "type": 1,
+  "rules": ["ldapadmin-[\\d.]+-x64-eng.msi"],
+  "tail": 1
+}

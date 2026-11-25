@@ -1,0 +1,13 @@
+{
+    "url": "https://www.torproject.org/download/tor/",
+    "rules": [
+        "tor-expert-bundle-windows-x86_64-[\\d.]+.tar.gz$",
+        "tor-expert-bundle-linux-x86_64-[\\d.]+.tar.gz$"
+    ],
+    "type": 1,
+    "tail": 2,
+    "proxy": {
+        "all": "http://127.0.0.1:1080",
+        "no_proxy": "localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16"
+    }
+}

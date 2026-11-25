@@ -1,0 +1,6 @@
+{
+  "url": "https://openvpn.net/index.php/open-source/downloads.html",
+  "type": 1,
+  "rules": ["OpenVPN-[\\d.]+-I[\\d]+-amd64.msi$"],
+  "tail": 1
+}

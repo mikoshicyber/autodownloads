@@ -1,0 +1,18 @@
+{
+  "url": "https://veracrypt.io/en/Downloads.html",
+  "rules": [
+    "VeraCrypt_Setup_x64_[\\d.]+\\.msi$"
+  ],
+  "path": [
+    "json",
+    1,
+    "path",
+    "type 2 only"
+  ],
+  "type": 1,
+  "tail": 1,
+  "proxy": {
+    "all": "http://127.0.0.1:1080",
+    "no_proxy": "localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16"
+  }
+}

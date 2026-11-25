@@ -1,0 +1,14 @@
+{
+  "url": "https://static.keet.io/downloads/latest/Keet.msix",
+  "rules": [
+    "Keet.msix"
+  ],
+  "path": [
+    "json",
+    1,
+    "path",
+    "type 2 only"
+  ],
+  "type": 0,
+  "tail": 1
+}

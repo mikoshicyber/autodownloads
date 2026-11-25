@@ -1,0 +1,6 @@
+{
+  "url": "https://github.com/mean00/avidemux2/releases/latest",
+  "type": 1,
+  "rules": ["Avidemux_[\\d\\.]+.*.64bits.exe"]
+
+}

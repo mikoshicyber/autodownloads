@@ -1,0 +1,8 @@
+{
+  "url": "https://github.com/ollama/ollama/releases/latest",
+  "rules": [
+    "OllamaSetup.exe$"
+  ],
+  "type": 0,
+  "tail": 1
+}

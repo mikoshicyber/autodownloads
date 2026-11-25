@@ -1,0 +1,7 @@
+
+{
+  "url": "https://www.cygwin.com/install.html",
+  "rules": [ "setup-x86_64.exe$" ],
+  "type": 1,
+  "tail": 1
+}

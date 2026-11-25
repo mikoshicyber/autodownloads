@@ -1,0 +1,6 @@
+{
+  "url": "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
+  "rules": [ "VSCodeUserSetup-x64-[\\d.]+.exe"],
+  "type": 0,
+  "tail": 1
+}

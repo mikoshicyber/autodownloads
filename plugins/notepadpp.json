@@ -1,0 +1,6 @@
+{
+  "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/latest",
+  "type": 1,
+  "rules": ["npp.[\\d.]+.Installer.x64.exe$"],
+  "tail": 1
+}

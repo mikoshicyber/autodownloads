@@ -1,0 +1,6 @@
+{
+  "url": "https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html",
+  "type": 1,
+  "rules": ["putty-64bit-[\\d.]+-installer.msi$"],
+  "tail": 1
+}

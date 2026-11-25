@@ -1,0 +1,5 @@
+{
+  "url": "https://download.mozilla.org/?product=firefox-latest&os=win64&lang=ru",
+  "rules": ["Firefox Setup [\\d.]+.exe"],
+  "type": 0
+}

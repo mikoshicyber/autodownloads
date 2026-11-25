@@ -1,0 +1,14 @@
+{
+  "url": "https://github.com/jgm/pandoc/releases/latest",
+  "rules": [
+    "pandoc-[\\d.]+-windows-x86_64.msi$"
+  ],
+  "path": [
+    "json",
+    1,
+    "path",
+    "type 2 only"
+  ],
+  "type": 1,
+  "tail": 1
+}

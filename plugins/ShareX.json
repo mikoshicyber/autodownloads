@@ -1,0 +1,6 @@
+{
+  "url": "https://github.com/ShareX/ShareX/releases/latest",
+  "type": 1,
+  "rules": ["ShareX-[\\d.]+-setup.exe$"],
+  "tail": 1
+}

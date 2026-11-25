@@ -1,0 +1,23 @@
+{
+  "type": 3,
+  "url": "https://mirror.blender.org/release/",
+  "search_regex": "^Blender[\\d.]+/$",
+  "search_tail": 2,
+  "max_depth": 2,
+  "max_pages": 20,
+  "rules": [
+    "^blender-[\\d.]+-windows-x64\\.msi$"
+  ],
+  "tail": 1,
+  "out": "",
+  "proxy": "",
+  "aria2": {
+    "split": 4,
+    "max_connection_per_server": 4,
+    "max_tries": 5,
+    "retry_wait": 5,
+    "connect_timeout": 20,
+    "timeout": 120,
+    "max_concurrent_downloads": 4
+  }
+}

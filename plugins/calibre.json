@@ -1,0 +1,7 @@
+{
+  "url": "https://github.com/kovidgoyal/calibre/releases/latest",
+  "type": 1,
+  "rules": ["calibre-64bit-[\\d.]+.msi"],
+  "proxy": {}
+
+}

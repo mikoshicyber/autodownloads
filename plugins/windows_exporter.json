@@ -1,0 +1,8 @@
+{
+  "url": "https://github.com/prometheus-community/windows_exporter/releases/latest",
+  "rules": [
+    "windows_exporter-[\\d.]+-amd64.msi"
+  ],
+  "type": 1,
+  "tail": 1
+}

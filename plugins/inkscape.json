@@ -1,0 +1,13 @@
+{
+  "url": "https://inkscape.org/release/all/windows/64-bit/exe/",
+  "type": 1,
+  "rules": [
+    "inkscape-[\\d.]+_[\\d-]+_?[\\dabcdef]+-x64.signed.exe$"
+  ],
+  "tail": 1,
+  "proxy": {
+        "all": "http://127.0.0.1:1080",
+        "no_proxy": "localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16"
+      }
+
+}

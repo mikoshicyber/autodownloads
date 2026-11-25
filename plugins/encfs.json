@@ -1,0 +1,6 @@
+{
+  "url": "https://sourceforge.net/projects/encfsmp/files/latest/download",
+  "rules": ["EncFSMP_[\\d.]+_Setup.exe"],
+  "sourceforge_platform": "windows",
+  "type": 0
+}

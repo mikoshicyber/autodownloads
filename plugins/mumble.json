@@ -1,0 +1,6 @@
+{
+  "url": "https://dl.mumble.info/latest/stable/client-windows-x64.exe",
+  "type": 0,
+  "rules": ["mumble_client-[\\d.]+.x64.exe$"],
+  "tail": 1
+}

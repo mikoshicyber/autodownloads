@@ -1,0 +1,8 @@
+{
+  "url": "https://sourceforge.net/projects/smartmontools/files/latest/download",
+  "rules": [
+    "smartmontools-[\\d.-]win32-setup.exe$"
+  ],
+  "type": 0,
+  "tail": 1
+}

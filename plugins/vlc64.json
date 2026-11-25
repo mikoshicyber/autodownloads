@@ -1,0 +1,6 @@
+{
+  "url": "https://download.videolan.org/pub/videolan/vlc/last/win64/",
+  "type": 1,
+  "rules": ["vlc-[\\d.]+-win64.msi$","vlc-[\\d.]+-win64.exe$"],
+  "tail": 2
+}

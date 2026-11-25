@@ -1,0 +1,15 @@
+{
+  "url": "https://github.com/nextcloud-releases/talk-desktop/releases/latest",
+  "rules": [
+    "Nextcloud.Talk-windows-x64.msi",
+    "Nextcloud.Talk-windows-x64.exe"
+  ],
+  "path": [
+    "json",
+    1,
+    "path",
+    "type 2 only"
+  ],
+  "type": 1,
+  "tail": 2
+}

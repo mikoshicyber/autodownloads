@@ -1,0 +1,14 @@
+{
+  "url": "https://github.com/UB-Mannheim/tesseract/wiki",
+  "rules": [ 
+    "tesseract-ocr-w64-setup-[\\d.]+.exe$"
+  ],
+  "path": [
+    "json",
+    1,
+    "path",
+    "type 2 only"
+  ],
+  "type": 1,
+  "tail": 1
+}

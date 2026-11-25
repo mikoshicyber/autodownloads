@@ -1,0 +1,5 @@
+{
+  "url": "https://aimp.ru/?do=download.file&id=3",
+  "rules": ["aimp_[\\d.]+_w64.exe"],
+  "type": 0
+}

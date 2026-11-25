@@ -1,0 +1,5 @@
+{
+  "url": "https://www.farmanager.com/download.php?l=ru",
+  "type": 1,
+  "rules": ["Far[\\db]+.x64.[\\d]+.msi"]
+}

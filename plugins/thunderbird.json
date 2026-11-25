@@ -1,0 +1,5 @@
+{
+  "url": "https://download.mozilla.org/?product=thunderbird-latest&os=win64&lang=ru",
+  "rules": ["Thunderbird Setup [\\d.]+.exe"],
+  "type": 0
+}

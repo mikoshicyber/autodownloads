@@ -1,0 +1,5 @@
+{
+  "url": "https://sourceforge.net/projects/tigervnc/files/latest/download",
+  "rules": ["tigervnc64-[\\d.]+.exe"],
+  "type": 0
+}

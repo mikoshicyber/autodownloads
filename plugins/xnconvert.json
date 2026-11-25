@@ -1,0 +1,6 @@
+{
+  "url": "https://www.xnview.com/download.php?file=XnConvert-win-x64.exe",
+  "type": 0,
+  "rules": ["XnConvert-win-x64.exe"],
+  "tail": 1
+}

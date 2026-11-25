@@ -1,0 +1,6 @@
+{
+  "url": "https://www.miranda-ng.org/distr/stable/",
+  "type": 1,
+  "rules": ["miranda-ng-v[\\d.]+_x64.exe"],
+  "tail": 1
+}

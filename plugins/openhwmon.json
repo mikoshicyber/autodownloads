@@ -1,0 +1,8 @@
+{
+  "url": "https://openhardwaremonitor.org/downloads/",
+  "type": 1,
+  "rules": [
+    "openhardwaremonitor-v[\\d.]+.zip"
+  ],
+  "tail": 1
+}

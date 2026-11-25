@@ -1,0 +1,6 @@
+{
+  "url": "https://krita.org/en/download/",
+  "type": 1,
+  "rules": ["krita-x64-[\\d.]+-setup.exe"],
+  "tail": 1
+}

@@ -1,0 +1,6 @@
+{
+  "url": "https://github.com/transmission-remote-gui/transgui/releases/latest",
+  "type": 1,
+  "rules": ["transgui-[\\d.]+-setup_64bit.exe"],
+  "tail": 1
+}

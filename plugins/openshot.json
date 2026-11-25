@@ -1,0 +1,8 @@
+{
+  "url": "https://www.openshot.org/download/",
+  "rules": [
+    "OpenShot-v[\\d.]+-x86_64.exe$"
+  ],
+  "type": 1,
+  "tail": 1
+}

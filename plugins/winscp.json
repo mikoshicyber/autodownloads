@@ -1,0 +1,26 @@
+{
+  "enabled": true,
+  "type": 0,
+  "url": "https://sourceforge.net/projects/winscp/files/latest/download",
+  "rules": [
+    "WinSCP-[\\d.]+-Setup.exe"
+  ],
+  "path": [],
+  "tail": 1,
+  "out": "",
+  "overwrite": false,
+  "sourceforge_platform": "windows",
+  "user_agent": "",
+  "proxy": "",
+  "aria2": {
+    "split": 8,
+    "max_connection_per_server": 8,
+    "max_tries": 3,
+    "retry_wait": 2,
+    "connect_timeout": 10,
+    "timeout": 10,
+    "max_concurrent_downloads": 4,
+    "conditional_get": false,
+    "content_disposition_default_utf8": true
+  }
+}

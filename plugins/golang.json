@@ -1,0 +1,6 @@
+{
+  "url": "https://go.dev/dl/",
+  "type": 1,
+  "rules": ["go[\\d.rc]+.windows-386.msi","go[\\d.rc]+.windows-amd64.msi"],
+  "tail": 1
+}

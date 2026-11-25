@@ -1,0 +1,6 @@
+{
+  "url": "https://files.gpg4win.org/",
+  "type": 1,
+  "rules": ["gpg4win-vanilla-[\\d.]+.exe$"],
+  "tail": 1
+}

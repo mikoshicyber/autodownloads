@@ -1,0 +1,5 @@
+{
+  "url": "https://sourceforge.net/projects/keepass/files/latest/download",
+  "rules": ["KeePass-[\\d.]+-Setup.exe"],
+  "type": 0
+}

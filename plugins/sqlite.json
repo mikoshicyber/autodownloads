@@ -1,0 +1,8 @@
+{
+  "url": "https://github.com/sqlitebrowser/sqlitebrowser/releases/latest",
+  "rules": [
+    "DB.Browser.for.SQLite-[\\d.]+-win64.msi"
+  ],
+  "type": 1,
+  "tail": 1
+}

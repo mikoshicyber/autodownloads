@@ -1,0 +1,6 @@
+{
+  "url": "https://github.com/qTox/qTox/releases/latest",
+  "type": 1,
+  "rules": ["setup-qtox-x86_64-release.exe$"],
+  "tail": 1
+}

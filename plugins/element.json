@@ -1,0 +1,8 @@
+{
+  "url": "https://packages.element.io/desktop/install/win32/x64/Element%20Setup.exe",
+  "rules": [
+    "Element.*Setup.exe"
+  ],
+  "type": 0,
+  "tail": 1
+}

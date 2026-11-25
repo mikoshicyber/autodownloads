@@ -1,0 +1,6 @@
+{
+  "url": "https://www.tightvnc.com/download.php",
+  "type": 1,
+  "rules": ["tightvnc-[\\d.]+-gpl-setup-64bit.msi"],
+  "tail": 2
+}

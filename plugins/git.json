@@ -1,0 +1,5 @@
+{
+  "url": "https://github.com/git-for-windows/git/releases/latest",
+  "type": 1,
+  "rules": ["Git-[\\d.]+-64-bit.exe"]
+}

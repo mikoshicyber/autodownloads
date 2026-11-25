@@ -1,0 +1,8 @@
+{
+  "url": "https://github.com/hiddify/hiddify-next/releases/latest",
+  "type": 1,
+  "rules": [
+    "Hiddify-Windows-Setup-x64.exe"
+  ],
+  "tail": 1
+}

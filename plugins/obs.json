@@ -1,0 +1,6 @@
+{
+  "url": "https://obsproject.com/ru/download",
+  "type": 1,
+  "rules": ["OBS-Studio-[\\d.]+-Windows-x64-Installer.exe$"],
+  "tail": 1
+}

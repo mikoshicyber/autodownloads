@@ -1,0 +1,9 @@
+{
+  "url": "https://github.com/jellyfin/jellyfin-media-player/releases/latest",
+  "type": 1,
+  "rules": [
+"JellyfinMediaPlayer-[\\d.]+-windows-x64-legacy.exe",
+"JellyfinMediaPlayer-[\\d.]+-windows-x64.exe"
+],
+  "tail":2
+}

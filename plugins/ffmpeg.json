@@ -1,0 +1,6 @@
+{
+  "url": "https://github.com/BtbN/FFmpeg-Builds/releases/latest",
+  "type": 1,
+  "rules": ["ffmpeg-master-latest-win64-gpl.zip"],
+  "tail": 1
+}

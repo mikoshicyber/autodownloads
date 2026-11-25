@@ -1,0 +1,14 @@
+{
+  "url": "https://gui.openconnect-vpn.net/download/",
+  "rules": [
+    "openconnect-gui-[\\d.-]+-win64.exe"
+  ],
+  "path": [
+    "json",
+    1,
+    "path",
+    "type 2 only"
+  ],
+  "type": 1,
+  "tail": 1
+}

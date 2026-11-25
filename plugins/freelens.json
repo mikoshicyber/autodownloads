@@ -1,0 +1,14 @@
+{
+  "url": "https://github.com/freelensapp/freelens/releases/latest",
+  "rules": [
+    "Freelens-[\\d.]+-windows-amd64.msi$"
+  ],
+  "path": [
+    "json",
+    1,
+    "path",
+    "type 2 only"
+  ],
+  "type": 1,
+  "tail": 1
+}
