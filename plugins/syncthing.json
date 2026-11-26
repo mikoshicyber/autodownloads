@@ -1,13 +1,7 @@
 {
   "url": "https://github.com/Bill-Stewart/SyncthingWindowsSetup/releases/latest",
   "rules": [
-    "syncthing-windows-setup.exe"
-  ],
-  "path": [
-    "json",
-    1,
-    "path",
-    "type 2 only"
+    "syncthing-windows-setup-v[\\d.]+.exe"
   ],
   "type": 1,
   "tail": 1
