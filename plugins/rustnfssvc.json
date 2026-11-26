@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "type": 1,
+  "url": "https://github.com/tangramor/RustNfsSvc/releases/latest",
+  "rules": [
+    "RustNfsSvc.[\\d.]+.zip$"
+  ],
+  "tail": 1
+}
