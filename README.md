@@ -1,33 +1,33 @@
 # Autodownload
 
-`autodownload.py` — загрузчик и обновлятор файлов по JSON-плагинам для Linux. Скрипт находит актуальные ссылки на установщики и другие артефакты, скачивает файлы через `aria2c`, возобновляет прерванные загрузки и удаляет старые завершённые версии по правилам плагинов.
+`autodownload.py` is a JSON plugin-based file downloader and updater for Linux and Windows. The script discovers current links to installers and other artifacts, downloads files using `aria2c`, resumes interrupted downloads, and removes older completed versions according to plugin rules.
 
-Документация составлена для версии скрипта **`2026.11.24.1`**.
+This documentation applies to script version **`2026.11.26.3`**.
 
-## Возможности
+## Features
 
-- Четыре типа источников: прямая ссылка, HTML/GitHub/SourceForge, JSON API и рекурсивный обход каталогов.
-- Запуск всех плагинов, одного плагина или нескольких выбранных плагинов.
-- Параллельные скачивания, повторные попытки и продолжение загрузок с помощью `aria2c` и файлов `.aria2`.
-- Пропуск существующих завершённых версионных файлов; для источников GitHub Releases — предварительная проверка SHA-256, если API предоставляет `digest`.
-- Для файлов с постоянным именем — скачивание во временный каталог и замена только при изменении SHA-256.
-- Проверка сигнатуры MSI и отбрасывание HTML-страниц, ошибочно полученных вместо файлов.
-- Очистка устаревших версий после успешной загрузки или вручную через `--clear`.
-- Блокировки одновременных запусков по плагинам и конечным файлам; раздельные журналы выбранных плагинов.
+- Four source types: direct URL, HTML/GitHub/SourceForge, JSON API, and recursive directory traversal.
+- Run all plugins, a single plugin, or multiple selected plugins.
+- Parallel downloads, retries, and download resumption using `aria2c` and `.aria2` control files.
+- Skip existing completed versioned files; for GitHub Releases, check SHA-256 before downloading if the API provides a `digest`.
+- For files with fixed names, download to a staging directory and replace only when the SHA-256 hash changes.
+- Check MSI signatures and reject HTML pages incorrectly returned instead of files.
+- Remove outdated versions after successful downloads or manually using `--clear`.
+- Lock concurrent runs by plugin and destination file; maintain separate logs for selected plugins.
 
-## Требования
+## Requirements
 
-- Linux: используются `fcntl.flock` и абстрактные Unix-сокеты для блокировок.
+- Linux: `fcntl.flock` and abstract Unix sockets are used for locking; Windows: system-wide named mutexes.
 - Python **3.9+**.
-- Python-пакеты `requests`, `beautifulsoup4`, `lxml`, `natsort`.
-- Утилиты `aria2c` и `curl`, доступные через `PATH`.
-- Права на чтение каталога плагинов и запись в каталог загрузок и журналов.
+- Python packages: `requests`, `beautifulsoup4`, `lxml`, and `natsort`.
+- `aria2c` and `curl` utilities available in `PATH`.
+- Read access to the plugin directory and write access to the download and log directories.
 
-### Подготовка к работе (Debian/Ubuntu)
+### Getting started (Debian/Ubuntu)
 
-Предполагается, что файлы `autodownload.py`, `requirements.txt` и каталог `plugins/` находятся в `/scripts`. Команды установки системных пакетов выполняются от `root` (либо через `sudo`). Каталог загрузок должен быть доступен на запись пользователю, запускающему скрипт.
+The following instructions assume that `autodownload.py`, `requirements.txt`, and the `plugins/` directory are located in `/scripts`. Run system package installation commands as `root` (or using `sudo`). The download directory must be writable by the user running the script.
 
-**Вариант 1 — системные Python-пакеты (для прямого запуска `./autodownload.py`):**
+**Option 1 — system Python packages (for running `./autodownload.py` directly):**
 
 ```bash
 apt-get update
@@ -38,7 +38,7 @@ cd /scripts
 ./autodownload.py --list
 ```
 
-**Вариант 2 — виртуальное окружение Python и `requirements.txt`:**
+**Option 2 — Python virtual environment and `requirements.txt`:**
 
 ```bash
 apt-get update
@@ -50,9 +50,9 @@ mkdir -p /mnt/hdd1/shares/autodownloads
 .venv/bin/python autodownload.py --list
 ```
 
-При использовании `venv` запускать скрипт следует именно через `.venv/bin/python`: его строка `#!/usr/bin/python3` при прямом запуске выбирает системный Python. Изолированное окружение позволяет устанавливать зависимости через `pip`, не изменяя системные пакеты Python (актуально для Debian 12+).
+When using `venv`, run the script through `.venv/bin/python`: the `#!/usr/bin/python3` shebang selects the system Python when the script is executed directly. A virtual environment allows dependencies to be installed with `pip` without modifying system Python packages (particularly relevant for Debian 12+).
 
-Проверка зависимостей для выбранного варианта:
+Verify the dependencies for the selected option:
 
 ```bash
 python3 -c 'import requests, bs4, lxml, natsort'
@@ -60,19 +60,19 @@ command -v aria2c
 command -v curl
 ```
 
-Для варианта с `venv` замените `python3` в первой команде проверки на `.venv/bin/python`.
+For the `venv` option, replace `python3` in the first verification command with `.venv/bin/python`.
 
-Первый запуск после подготовки:
+First run after setup:
 
 ```bash
 ./autodownload.py --run ollama
 ```
 
-При использовании `venv` вместо последней команды выполните `.venv/bin/python autodownload.py --run ollama`.
+When using `venv`, run `.venv/bin/python autodownload.py --run ollama` instead of the last command.
 
-## Размещение
+## Directory layout
 
-Пример структуры проекта:
+Example project structure:
 
 ```text
 /scripts/
@@ -85,106 +85,106 @@ command -v curl
 └── autodownload.log
 ```
 
-По умолчанию в скрипте заданы следующие пути:
+The script uses the following default paths:
 
-| Назначение | Путь |
+| Purpose | Path |
 | --- | --- |
-| Конфигурации плагинов | `plugins/` рядом со скриптом |
-| Скачанные файлы | `/mnt/hdd1/shares/autodownloads/` |
-| Постоянный временный каталог | `/mnt/hdd1/shares/autodownloads/.autodownload-stage/` |
-| Карантин некорректных файлов | `.autodownload-stage/.invalid/` |
-| Общий журнал | `autodownload.log` рядом со скриптом |
+| Plugin configurations | `plugins/` next to the script |
+| Downloaded files | `/mnt/hdd1/shares/autodownloads/` (Linux default); `AUTODOWNLOAD_DIR` |
+| Persistent staging directory | `.autodownload-stage/` inside the download directory |
+| Quarantine for invalid files | `.autodownload-stage/.invalid/` |
+| General log | `autodownload.log` next to the script |
 
-Каталог загрузок задаётся константой `workdir` внутри `autodownload.py`; отдельного параметра CLI для его изменения нет. Временный каталог создаётся с правами `0777`. При настройке окружения учитывайте доступ других локальных пользователей к этому каталогу.
+The download directory is configured using the `AUTODOWNLOAD_DIR` environment variable (an absolute or relative path). On Linux, the default is `/mnt/hdd1/shares/autodownloads/`; on Windows, the variable is required for downloads and cleanup. Relative paths are resolved against the current working directory. There is no separate CLI option. The staging directory is created inside the download directory; on Linux, its permissions are set to `0777`. Consider access by other local users to this directory.
 
-## Запуск
+## Usage
 
-Все команды ниже предполагают, что текущий каталог — `/scripts` и файл исполняемый (`chmod +x autodownload.py`). Вместо `./autodownload.py` можно использовать `python3 autodownload.py`.
+The commands below assume Linux, `/scripts` as the current directory, and an executable script (`chmod +x autodownload.py`). You can use `python3 autodownload.py` instead of `./autodownload.py`. On Windows, install dependencies using `python -m pip install -r requirements.txt`, ensure `aria2c` and `curl` are available in `PATH`, set `$env:AUTODOWNLOAD_DIR = 'D:\Downloads'` in PowerShell, and use `python autodownload.py --run`. On Linux, override the directory using `AUTODOWNLOAD_DIR=/path/to/downloads ./autodownload.py --run`.
 
-| Команда | Назначение |
+| Command | Purpose |
 | --- | --- |
-| `./autodownload.py` | Загрузка по всем плагинам |
-| `./autodownload.py --run` | То же самое |
-| `./autodownload.py --run ollama` | Запуск одного плагина |
-| `./autodownload.py --run ollama blender` | Запуск нескольких плагинов |
-| `./autodownload.py --run ollama --run blender` | Альтернативная запись нескольких плагинов |
-| `./autodownload.py --list` | Вывести имена плагинов |
-| `./autodownload.py --create example` | Создать шаблон `plugins/example.json` |
-| `./autodownload.py --edit example` | Открыть плагин через `$EDITOR`, при отсутствии — создать |
-| `./autodownload.py --clear` | Удалить старые завершённые версии по `rules` |
-| `./autodownload.py --rename` | Удалить часть имени после символа `?` |
-| `./autodownload.py --version` | Версия скрипта |
-| `./autodownload.py --help` | Полная встроенная справка |
+| `./autodownload.py` | Download files for all plugins |
+| `./autodownload.py --run` | Same as above |
+| `./autodownload.py --run ollama` | Run one plugin |
+| `./autodownload.py --run ollama blender` | Run multiple plugins |
+| `./autodownload.py --run ollama --run blender` | Alternative syntax for multiple plugins |
+| `./autodownload.py --list` | List plugin names |
+| `./autodownload.py --create example` | Create the `plugins/example.json` template |
+| `./autodownload.py --edit example` | Open the plugin using `$EDITOR`, if set; create it if missing |
+| `./autodownload.py --clear` | Remove older completed versions according to `rules` |
+| `./autodownload.py --rename` | Remove the filename portion after the `?` character |
+| `./autodownload.py --version` | Display the script version |
+| `./autodownload.py --help` | Display the complete built-in help |
 
-Дополнительные параметры:
+Additional options:
 
 ```bash
 ./autodownload.py --run ollama blender --debug
 ./autodownload.py --run ollama --log-file /scripts/ollama-run.log
 ```
 
-`--debug` включает подробные сообщения поиска и планирования загрузок. `--log-file` задаёт путь к журналу явно; каталог для журнала должен существовать.
+`--debug` enables detailed discovery and download planning messages. `--log-file` explicitly specifies the log path; the log directory must already exist.
 
-> **Внимание:** `--clear` сразу удаляет подходящие старые файлы. Отдельного режима `--dry-run` в текущей версии нет. `--rename` также изменяет имена файлов, в том числе в подкаталогах каталога загрузок.
+> **Warning:** `--clear` immediately removes matching older files. There is no separate `--dry-run` mode in this version. `--rename` also changes filenames in subdirectories of the download directory.
 
-### Параллельные запуски
+### Concurrent runs
 
-Разные выбранные плагины можно запускать одновременно. При пересечении имён плагинов следующий запуск ожидает освобождения блокировки; если два плагина обращаются к одному конечному файлу, применяется дополнительная блокировка этого файла. Блокировки не создают постоянных `.lock`-файлов.
+Different selected plugins can run concurrently. If plugin names overlap, the next run waits until the lock is released; if two plugins target the same destination file, an additional file-specific lock is used. Locks do not create persistent `.lock` files.
 
-Для запуска одного или нескольких выбранных плагинов по умолчанию используется журнал вида `autodownload.ollama.log` либо `autodownload.blender__ollama.log` (имена отсортированы). Для полного запуска используется `autodownload.log`. При указании одинакового `--log-file` запись сериализуется через файловую блокировку. **При начале очередного запуска журнал перезаписывается**, а не дополняется.
+When running one or more selected plugins, the default log is named `autodownload.ollama.log` or `autodownload.blender__ollama.log` (names are sorted). A full run uses `autodownload.log`. When the same `--log-file` is specified, writes are serialized using a file lock on Linux or a named mutex on Windows. **The log is overwritten at the start of each run**, not appended to.
 
-## Плагины
+## Plugins
 
-Каждый файл `plugins/ИМЯ.json` — отдельный плагин. Допускается JSON с комментариями `//` и `/* ... */`. Все плагины с расширением `.json` из каталога рассматриваются при полном запуске.
+Each `plugins/NAME.json` file is a separate plugin. JSON with `//` and `/* ... */` comments is supported. All `.json` plugins in the directory are considered during a full run.
 
-### Типы источников
+### Source types
 
-| `type` | Источник | Как работает |
+| `type` | Source | How it works |
 | --- | --- | --- |
-| `0` | Прямая ссылка | Передаёт URL на загрузку; если имя нельзя определить, предварительно разрешает HTTP-редирект через `curl` |
-| `1` | HTML, GitHub Releases, SourceForge | Находит ссылки, отбирает их по `rules`; для GitHub использует Releases API |
-| `2` | JSON API или манифест | Извлекает URL по полю `path` |
-| `3` | Вложенные HTML-каталоги | Переходит в подкаталоги по `search_regex`, а файлы отбирает по `rules` |
+| `0` | Direct URL | Passes the URL to the downloader; if the filename cannot be determined, resolves the HTTP redirect using `curl` first |
+| `1` | HTML, GitHub Releases, SourceForge | Discovers links and filters them using `rules`; uses the Releases API for GitHub |
+| `2` | JSON API or manifest | Extracts URLs using the `path` field |
+| `3` | Nested HTML directories | Traverses subdirectories using `search_regex` and filters files using `rules` |
 
-Если `type` не задан, используется `1`.
+If `type` is not specified, it defaults to `1`.
 
-### Поля плагина
+### Plugin fields
 
-| Поле | Назначение |
+| Field | Purpose |
 | --- | --- |
-| `url` | Исходный URL файла, страницы, каталога или JSON API |
-| `type` | Тип источника: `0`, `1`, `2` или `3` |
-| `rules` | Массив регулярных выражений для имён файлов; для `type: 1` и `type: 3` используется при поиске, для всех типов — при очистке устаревших версий |
-| `tail` | Число последних ссылок после естественной сортировки (`0` — все); применяется при поиске `type: 1` и `type: 3` |
-| `path` | Массив ключей JSON и индексов массива; используется только в `type: 2` |
-| `out` | Принудительное локальное имя файла; пустая строка — имя из URL или конечного редиректа |
-| `proxy` | Прокси конкретного плагина: URL-строка либо объект `all`, `http`, `https`, `ftp`, `no_proxy` |
-| `aria2` | Объект индивидуальных параметров `aria2c` |
-| `request_connect_timeout` | Тайм-аут соединения при запросах метаданных, секунды (по умолчанию `10`) |
-| `request_read_timeout` | Тайм-аут чтения HTML/JSON, секунды (по умолчанию `45`) |
-| `request_retries` | Количество повторов запроса метаданных (по умолчанию `2`) |
-| `request_retry_wait` | Базовая задержка между повторами, секунды (по умолчанию `2`) |
-| `sourceforge_mirror` | Выбор зеркала SourceForge через `use_mirror` |
-| `sourceforge_platform` | Служебное указание платформы; само по себе **не ограничивает** `latest/download` |
+| `url` | Source URL of a file, page, directory, or JSON API |
+| `type` | Source type: `0`, `1`, `2`, or `3` |
+| `rules` | Array of filename regular expressions; used for discovery with `type: 1` and `type: 3`, and for outdated version cleanup with all types |
+| `tail` | Number of last links after natural sorting (`0` means all); used for discovery with `type: 1` and `type: 3` |
+| `path` | Array of JSON keys and array indices; used only with `type: 2` |
+| `out` | Override the local filename; an empty string uses the filename from the URL or final redirect |
+| `proxy` | Plugin-specific proxy: a URL string or an object with `all`, `http`, `https`, `ftp`, and `no_proxy` keys |
+| `aria2` | Object containing custom `aria2c` settings |
+| `request_connect_timeout` | Connection timeout for metadata requests, in seconds (default: `10`) |
+| `request_read_timeout` | HTML/JSON read timeout, in seconds (default: `45`) |
+| `request_retries` | Number of metadata request retries (default: `2`) |
+| `request_retry_wait` | Base delay between retries, in seconds (default: `2`) |
+| `sourceforge_mirror` | Select a SourceForge mirror using `use_mirror` |
+| `sourceforge_platform` | Informational platform setting; does **not constrain** `latest/download` by itself |
 
-Регулярные выражения в `rules` сопоставляются с именем файла без учёта регистра. Для поиска используется `re.match()` — совпадение начинается с начала имени; `re.search()` используется при очистке. В JSON обратную косую черту необходимо экранировать: `\\.` вместо `\.`.
+Regular expressions in `rules` are matched against filenames case-insensitively. Discovery uses `re.match()`, which matches from the beginning of the filename; cleanup uses `re.search()`. In JSON, backslashes must be escaped: `\\.` instead of `\.`.
 
-В `type: 0` и `type: 2` поле `rules` **не фильтрует загружаемые URL**; оно определяет, какие имена участвуют в последующей очистке. В текущей реализации `tail` также не ограничивает список URL, полученный из JSON (`type: 2`).
+With `type: 0` and `type: 2`, `rules` **does not filter downloaded URLs**; it determines which filenames are considered during subsequent cleanup. In the current implementation, `tail` also does not limit the list of URLs obtained from JSON (`type: 2`).
 
-#### Дополнительные поля для `type: 3`
+#### Additional fields for `type: 3`
 
-| Поле | Назначение | Значение по умолчанию |
+| Field | Purpose | Default |
 | --- | --- | --- |
-| `search_regex` | Обязательное выражение `re.search()` для имён/путей подкаталогов | Нет |
-| `search_tail` | Число последних подходящих каталогов на каждом уровне; `0` — все | `0` |
-| `max_depth` | Максимальная глубина рекурсивного обхода | `3` |
-| `max_pages` | Максимальное число обработанных HTML-страниц | `100` |
+| `search_regex` | Required `re.search()` expression for subdirectory names or paths | None |
+| `search_tail` | Number of last matching directories at each level; `0` means all | `0` |
+| `max_depth` | Maximum recursive traversal depth | `3` |
+| `max_pages` | Maximum number of HTML pages processed | `100` |
 
-Обход ограничен исходным хостом и деревом исходного каталога. Служебные ссылки с параметрами `?stats=` и `?mirrorlist=` исключаются. Каталоги выбираются естественной сортировкой (`natural sort`).
+Traversal is restricted to the original host and directory tree. Auxiliary links containing `?stats=` and `?mirrorlist=` parameters are excluded. Directories are selected using natural sorting.
 
-### Примеры
+### Examples
 
-#### Тип 0: прямая ссылка с постоянным именем
+#### Type 0: direct URL with a fixed filename
 
 `plugins/aimp.json`:
 
@@ -198,9 +198,9 @@ command -v curl
 }
 ```
 
-Поскольку в исходном URL нет имени установщика, скрипт предварительно определяет конечный URL посредством `curl`, а сам файл скачивает через `aria2c`.
+Because the original URL does not contain the installer filename, the script first resolves the final URL using `curl` and downloads the file using `aria2c`.
 
-#### Тип 1: GitHub Releases
+#### Type 1: GitHub Releases
 
 `plugins/ollama.json`:
 
@@ -215,9 +215,9 @@ command -v curl
 }
 ```
 
-Скрипт выбирает нужный Release Asset через GitHub API. Если GitHub предоставляет `digest` для выбранного файла, до загрузки сравнивается SHA-256 с локальной копией.
+The script selects the required release asset using the GitHub API. If GitHub provides a `digest` for the selected file, its SHA-256 hash is compared with the local copy before downloading.
 
-#### Тип 2: JSON-манифест
+#### Type 2: JSON manifest
 
 `plugins/tesseract.json`:
 
@@ -232,9 +232,9 @@ command -v curl
 }
 ```
 
-`path` последовательно выбирает `architecture` → `64bit` → `url` из JSON. Результат должен содержать одну ссылку или массив ссылок. Актуальность файла зависит от обновления стороннего манифеста.
+`path` sequentially selects `architecture` → `64bit` → `url` from the JSON document. The result must contain a single URL or an array of URLs. File availability and freshness depend on updates to the third-party manifest.
 
-#### Тип 3: рекурсивный поиск Blender MSI
+#### Type 3: recursive search for Blender MSI
 
 `plugins/blender.json`:
 
@@ -253,11 +253,11 @@ command -v curl
 }
 ```
 
-Скрипт проверяет две последние ветки Blender и отбирает последний подходящий MSI. Имя файла и версия не фиксируются в URL плагина. Это пример конфигурации; доступность удалённого сервера зависит от сети.
+The script checks the two latest Blender branches and selects the latest matching MSI file. Neither the filename nor the version is hardcoded in the plugin URL. This is an example configuration; remote server availability depends on the network.
 
-## Параметры aria2
+## aria2 settings
 
-Значения `DEFAULT_ARIA2` в скрипте:
+The `DEFAULT_ARIA2` values in the script:
 
 ```json
 {
@@ -271,7 +271,7 @@ command -v curl
 }
 ```
 
-Каждый плагин может переопределять нужные значения внутри `aria2`. Например:
+Each plugin can override the required settings within `aria2`. For example:
 
 ```json
 {
@@ -283,74 +283,74 @@ command -v curl
 }
 ```
 
-Этот фрагмент показывает только объект `aria2`; при использовании он должен находиться внутри полноценного JSON-плагина.
+This snippet shows only the `aria2` object; it must be included within a complete JSON plugin when used.
 
-Дополнительно поддерживаются `auto_save_interval`, `min_split_size`, `file_allocation`, `lowest_speed_limit`, `user_agent`, `referer`, `conditional_get`, `content_disposition_default_utf8`, `no_want_digest_header`, `http_accept_gzip`, `out`. Для большинства параметров допустимы варианты имён с подчёркиванием и дефисом; используются также алиасы `s`, `x` и `j` для соответствующих числовых параметров.
+Additional supported settings include `auto_save_interval`, `min_split_size`, `file_allocation`, `lowest_speed_limit`, `user_agent`, `referer`, `conditional_get`, `content_disposition_default_utf8`, `no_want_digest_header`, `http_accept_gzip`, and `out`. Most options accept both underscore-separated and hyphenated names; the aliases `s`, `x`, and `j` are also available for their corresponding numeric settings.
 
-Для SourceForge скрипт применяет отдельные стартовые настройки соединений и тайм-аутов; индивидуальный блок `aria2` имеет над ними приоритет. Параметр `max_concurrent_downloads` управляет числом параллельных задач загрузки внутри скрипта.
+For SourceForge, the script uses separate default connection and timeout settings; a custom `aria2` object takes precedence. The `max_concurrent_downloads` setting controls the number of parallel download tasks within the script; the maximum of the selected downloads' settings and the default value (`4`) is used.
 
-## Обработка скачанных файлов
+## Downloaded file handling
 
-### Файлы с версией в имени
+### Files with a version in the filename
 
-Примеры: `blender-5.3.0-windows-x64.msi`, `7z2600-x64.exe`, `OpenShot-v3.5.1-x86_64.exe`.
+Examples: `blender-5.3.0-windows-x64.msi`, `7z2600-x64.exe`, `OpenShot-v3.5.1-x86_64.exe`.
 
-- Если завершённый файл уже существует и проходит предусмотренную проверку, повторная загрузка пропускается.
-- Новая версия загружается напрямую в основной каталог.
-- При наличии SHA-256 из GitHub API совпадение проверяется до загрузки; если существующий версионный файл имеет другой хэш, новый скачивается через временный каталог и заменяет старый только после проверки.
-- Для продолжения прерванных загрузок используются файлы `.aria2`.
+- If a completed file already exists and passes the applicable validation checks, it is not downloaded again.
+- A new version is downloaded directly to the main directory.
+- If the GitHub API provides SHA-256, the hash is checked before downloading; if an existing versioned file has a different hash, the new file is downloaded through the staging directory and replaces the old file only after verification.
+- `.aria2` control files are used to resume interrupted downloads.
 
-### Файлы без версии в имени
+### Files without a version in the filename
 
-Примеры: `OllamaSetup.exe`, `Keet.msix`, `Element Setup.exe`.
+Examples: `OllamaSetup.exe`, `Keet.msix`, `Element Setup.exe`.
 
-- Загрузка выполняется в постоянный каталог `.autodownload-stage/`.
-- После успешной загрузки SHA-256 сравнивается с файлом в основном каталоге.
-- При совпадении временная копия удаляется, локальный файл не меняется.
-- При различии временный файл заменяет основной после завершения загрузки.
-- При ошибке прежняя основная копия сохраняется; незавершённая загрузка с `.aria2` может быть продолжена при следующем запуске.
+- Downloads are written to the persistent `.autodownload-stage/` directory.
+- After a successful download, SHA-256 is compared with the file in the main directory.
+- If the hashes match, the staged copy is removed and the local file remains unchanged.
+- If the hashes differ, the staged file replaces the main copy after the download is complete.
+- If an error occurs, the previous main copy is preserved; an incomplete download with a `.aria2` control file may be resumed on the next run.
 
-### Проверка содержимого
+### Content validation
 
-- Для `.msi` проверяется сигнатура контейнера OLE/CFB.
-- HTML-документы вместо скачиваемых артефактов отклоняются.
-- Некорректные завершённые файлы переносятся в `.autodownload-stage/.invalid/`.
-- Для GitHub Releases при наличии `digest` проверяется SHA-256 после скачивания; при несовпадении файл отклоняется.
+- For `.msi` files, the OLE/CFB container signature is checked.
+- HTML documents returned instead of downloadable artifacts are rejected.
+- Invalid completed files are moved to `.autodownload-stage/.invalid/`.
+- For GitHub Releases, SHA-256 is checked after downloading if a `digest` is available; files with mismatched hashes are rejected.
 
-**Ограничение:** проверки сигнатуры MSI и HTML не заменяют криптографическую проверку всех типов файлов. Если сервер не публикует SHA-256, скрипт не может гарантировать подлинность произвольного EXE/ZIP.
+**Limitation:** MSI signature and HTML checks are not a substitute for cryptographic verification of all file types. If the server does not publish a SHA-256 hash, the script cannot guarantee the authenticity of an arbitrary EXE or ZIP file.
 
-## Очистка старых версий
+## Cleanup of older versions
 
-После успешного завершения загрузки скрипт удаляет старые **завершённые** версии, подпадающие под соответствующие `rules`. При сравнении учитывается семейство имени файла, чтобы не смешивать разные варианты и архитектуры.
+After a successful download, the script removes older **completed** versions matching the applicable `rules`. Filename families are considered during comparison to keep different variants and architectures separate.
 
-Ручная очистка:
+Manual cleanup:
 
 ```bash
 ./autodownload.py --clear
 ```
 
-В текущей реализации очистка рассматривает только файлы непосредственно в основном каталоге загрузок. Не удаляются файлы `.aria2`, незавершённые загрузки, файлы без определённой версии и содержимое `.autodownload-stage/`. При ошибке загрузки прежние файлы не очищаются по результатам этой загрузки.
+The current implementation considers only files directly inside the main download directory. `.aria2` files, incomplete downloads, files with no identifiable version, and the contents of `.autodownload-stage/` are not removed. If a download fails, previous files are not cleaned up as a result of that download.
 
-Перед первым применением `--clear` рекомендуется проверить текущие `rules` в плагинах и сохранить резервную копию каталога при наличии важных файлов.
+Before using `--clear` for the first time, review the current `rules` in the plugins and back up the directory if it contains important files.
 
-## Журналы и ошибки
+## Logs and errors
 
-Сообщения `INFO`, `WARN`, `ERROR` и `DEBUG`, включая вывод `aria2c`, передаются в консоль и журнал. Потенциально чувствительные значения некоторых параметров URL маскируются.
+`INFO`, `WARN`, `ERROR`, and `DEBUG` messages, including `aria2c` output, are written to both the console and the log. Potentially sensitive values of certain URL parameters are masked.
 
-- Запуск нескольких плагинов продолжает работу при ошибке одного плагина; итоговый запуск загрузки завершается с ненулевым статусом, если зафиксированы ошибки.
-- Пустой или неразрешимый результат поиска фиксируется как ошибка соответствующего плагина.
-- Ошибки скачивания не должны приводить к удалению прежней корректной копии файла.
-- При проблеме с загрузкой полезно запускать нужный плагин отдельно с `--debug` и проверять соответствующий журнал.
+- When running multiple plugins, execution continues if one plugin fails; the overall download run exits with a nonzero status if errors are recorded.
+- An empty or unresolvable discovery result is recorded as an error for the corresponding plugin.
+- Download failures should not cause a previous valid copy of a file to be removed.
+- When troubleshooting downloads, run the relevant plugin separately with `--debug` and inspect its log.
 
 ```bash
 ./autodownload.py --run ollama --debug
 ./autodownload.py --help
 ```
 
-## Ограничения
+## Limitations
 
-- Обход `type: 3` работает с обычными HTML-ссылками, но не исполняет JavaScript страницы.
-- Наличие контрольной суммы в GitHub Release Asset зависит от данных, опубликованных GitHub; при отсутствии `digest` действует прежняя логика.
-- Проверка новых версий определяется ссылками источника, правилами плагина и сортировкой; сторонний JSON-манифест может обновляться с задержкой.
-- Скрипт не является универсальным браузером и не обходит CAPTCHA или другую интерактивную антибот-защиту.
-- Все пути и ограничения нужно сверять с версией установленного `autodownload.py`; встроенная справка `--help` описывает параметры текущего экземпляра.
+- `type: 3` traversal works with ordinary HTML links but does not execute page JavaScript.
+- The availability of checksums in GitHub release assets depends on the data published by GitHub; if no `digest` is available, the previous download logic applies.
+- New version detection depends on source links, plugin rules, and sorting; third-party JSON manifests may be updated with a delay.
+- The script is not a general-purpose browser and does not bypass CAPTCHA or other interactive anti-bot protection.
+- All paths and limitations should be checked against the installed `autodownload.py` version; the built-in `--help` describes the options of the current instance.
