@@ -2,7 +2,7 @@
 
 `autodownload.py` is a JSON plugin-based file downloader and updater for Linux and Windows. The script discovers current links to installers and other artifacts, downloads files using `aria2c`, resumes interrupted downloads, and removes older completed versions according to plugin rules.
 
-This documentation applies to script version **`2026.11.26.3`**.
+This documentation applies to script version **`2026.11.26.4`**.
 
 ## Features
 
@@ -13,7 +13,7 @@ This documentation applies to script version **`2026.11.26.3`**.
 - For files with fixed names, download to a staging directory and replace only when the SHA-256 hash changes.
 - Check MSI signatures and reject HTML pages incorrectly returned instead of files.
 - Remove outdated versions after successful downloads or manually using `--clear`.
-- Lock concurrent runs by plugin and destination file; maintain separate logs for selected plugins.
+- Lock concurrent runs by plugin and destination file; optionally maintain separate logs for selected plugins.
 
 ## Requirements
 
@@ -21,7 +21,7 @@ This documentation applies to script version **`2026.11.26.3`**.
 - Python **3.9+**.
 - Python packages: `requests`, `beautifulsoup4`, `lxml`, and `natsort`.
 - `aria2c` and `curl` utilities available in `PATH`.
-- Read access to the plugin directory and write access to the download and log directories.
+- Read access to the plugin directory and write access to the download directory and, when file logging is enabled, the log directory.
 
 ### Getting started (Debian/Ubuntu)
 
@@ -93,7 +93,7 @@ The script uses the following default paths:
 | Downloaded files | `/mnt/hdd1/shares/autodownloads/` (Linux default); `AUTODOWNLOAD_DIR` |
 | Persistent staging directory | `.autodownload-stage/` inside the download directory |
 | Quarantine for invalid files | `.autodownload-stage/.invalid/` |
-| General log | `autodownload.log` next to the script |
+| General log (optional) | `autodownload.log` next to the script |
 
 The download directory is configured using the `AUTODOWNLOAD_DIR` environment variable (an absolute or relative path). On Linux, the default is `/mnt/hdd1/shares/autodownloads/`; on Windows, the variable is required for downloads and cleanup. Relative paths are resolved against the current working directory. There is no separate CLI option. The staging directory is created inside the download directory; on Linux, its permissions are set to `0777`. Consider access by other local users to this directory.
 
@@ -120,10 +120,12 @@ Additional options:
 
 ```bash
 ./autodownload.py --run ollama blender --debug
+./autodownload.py --run ollama --log
+AUTODOWNLOAD_LOG=1 ./autodownload.py --run ollama
 ./autodownload.py --run ollama --log-file /scripts/ollama-run.log
 ```
 
-`--debug` enables detailed discovery and download planning messages. `--log-file` explicitly specifies the log path; the log directory must already exist.
+`--debug` enables detailed discovery and download planning messages without enabling file logging. File logging is disabled by default; existing log files are left untouched. Use `--log`, `--log-file PATH`, or set `AUTODOWNLOAD_LOG=1` to enable it. The environment variable also accepts `true`, `yes`, or `on` (case-insensitive); other values, including `0`, leave file logging disabled unless a logging option is supplied. On Windows (PowerShell), use `$env:AUTODOWNLOAD_LOG = '1'`. `--log-file` enables logging and takes precedence over the default log path; the log directory must already exist.
 
 > **Warning:** `--clear` immediately removes matching older files. There is no separate `--dry-run` mode in this version. `--rename` also changes filenames in subdirectories of the download directory.
 
@@ -131,7 +133,7 @@ Additional options:
 
 Different selected plugins can run concurrently. If plugin names overlap, the next run waits until the lock is released; if two plugins target the same destination file, an additional file-specific lock is used. Locks do not create persistent `.lock` files.
 
-When running one or more selected plugins, the default log is named `autodownload.ollama.log` or `autodownload.blender__ollama.log` (names are sorted). A full run uses `autodownload.log`. When the same `--log-file` is specified, writes are serialized using a file lock on Linux or a named mutex on Windows. **The log is overwritten at the start of each run**, not appended to.
+When file logging is enabled and one or more selected plugins are run, the default log is named `autodownload.ollama.log` or `autodownload.blender__ollama.log` (names are sorted). A full run uses `autodownload.log`. When the same `--log-file` is specified, writes are serialized using a file lock on Linux or a named mutex on Windows. **The log is overwritten at the start of each run with file logging enabled**, not appended to.
 
 ## Plugins
 
@@ -335,15 +337,15 @@ Before using `--clear` for the first time, review the current `rules` in the plu
 
 ## Logs and errors
 
-`INFO`, `WARN`, `ERROR`, and `DEBUG` messages, including `aria2c` output, are written to both the console and the log. Potentially sensitive values of certain URL parameters are masked.
+`INFO`, `WARN`, `ERROR`, and `DEBUG` messages, including `aria2c` output, are written to the console and, only when file logging is enabled, to the log. Potentially sensitive values of certain URL parameters are masked in both modes.
 
 - When running multiple plugins, execution continues if one plugin fails; the overall download run exits with a nonzero status if errors are recorded.
 - An empty or unresolvable discovery result is recorded as an error for the corresponding plugin.
 - Download failures should not cause a previous valid copy of a file to be removed.
-- When troubleshooting downloads, run the relevant plugin separately with `--debug` and inspect its log.
+- When troubleshooting downloads, run the relevant plugin separately with `--debug --log` and inspect its log.
 
 ```bash
-./autodownload.py --run ollama --debug
+./autodownload.py --run ollama --debug --log
 ./autodownload.py --help
 ```
 

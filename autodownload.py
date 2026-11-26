@@ -30,7 +30,7 @@ if os.name != "nt":
     import fcntl
 
 DEBUG = False
-SCRIPT_VERSION = "2026.11.26.3"
+SCRIPT_VERSION = "2026.11.26.4"
 DEFAULT_DOWNLOAD_DIRECTORY = "/mnt/hdd1/shares/autodownloads/"
 workdir = os.path.abspath(os.path.expanduser(os.environ.get("AUTODOWNLOAD_DIR") or DEFAULT_DOWNLOAD_DIRECTORY))
 STAGING_DIRECTORY = os.path.join(workdir, ".autodownload-stage")
@@ -101,12 +101,14 @@ class TeeStream:
     def write(self, text):
         safe_text = redact_log_text(text)
         self.terminal.write(safe_text)
-        self.logfile.write(safe_text)
+        if self.logfile is not None:
+            self.logfile.write(safe_text)
         return len(text)
 
     def flush(self):
         self.terminal.flush()
-        self.logfile.flush()
+        if self.logfile is not None:
+            self.logfile.flush()
 
     def isatty(self):
         return self.terminal.isatty()
@@ -150,20 +152,22 @@ def windows_named_lock(identity, scopes):
 
 @contextmanager
 def capture_log(path):
-    lock = windows_named_lock(path, ("log",)) if os.name == "nt" else nullcontext()
+    lock = windows_named_lock(path, ("log",)) if path and os.name == "nt" else nullcontext()
     with lock:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8", buffering=1) as logfile:
-            if os.name != "nt":
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            os.ftruncate(fd, 0)
-            os.lseek(fd, 0, os.SEEK_SET)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600) if path else None
+        with (os.fdopen(fd, "w", encoding="utf-8", buffering=1) if fd is not None else nullcontext()) as logfile:
+            if logfile is not None:
+                if os.name != "nt":
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                os.ftruncate(fd, 0)
+                os.lseek(fd, 0, os.SEEK_SET)
             original_stdout, original_stderr = sys.stdout, sys.stderr
             sys.stdout = TeeStream(original_stdout, logfile)
             sys.stderr = TeeStream(original_stderr, logfile)
             try:
                 print(f"INFO: Run started at {datetime.now().astimezone().isoformat(timespec='seconds')}")
-                print(f"INFO: Log file: {path}")
+                if logfile is not None:
+                    print(f"INFO: Log file: {path}")
                 print(f"INFO: Script version: {SCRIPT_VERSION}")
                 print(f"INFO: Download directory: {workdir}")
                 yield
@@ -1746,6 +1750,8 @@ def run_lock_names(args):
 def run_log_file(args, plugin_names):
     if args.log_file:
         return args.log_file
+    if not args.log and os.environ.get("AUTODOWNLOAD_LOG", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return None
     directory = os.path.dirname(os.path.realpath(__file__))
     if args.run is None or any(not group for group in args.run):
         return os.path.join(directory, "autodownload.log")
@@ -1813,8 +1819,11 @@ Operating modes:
   If at least one plugin overlaps, the second invocation waits for the first
   to finish instead of failing with a lock error.
   Overlapping files are protected by a separate download lock.
-  --run NAME creates a separate autodownload.NAME.log; a general run
-  uses autodownload.log. --log-file specifies an explicit log file path.
+  File logging is disabled by default. Console output is always available.
+  Enable file logging with --log, --log-file PATH, or AUTODOWNLOAD_LOG=1
+  (also accepts true, yes, or on, case-insensitive).
+  When enabled, --run NAME uses autodownload.NAME.log; a general run uses
+  autodownload.log. --log-file specifies an explicit log file path.
   Concurrent writes to the same explicitly specified log file are serialized.
   Linux: Unix sockets and flock; Windows: system-wide named mutexes.
   ./autodownload.py --list                   List plugin names
@@ -1826,8 +1835,11 @@ Operating modes:
                 Unversioned files, .aria2 files, and .autodownload-stage are not removed.
   ./autodownload.py --rename                 Remove the filename portion after the ? character
   ./autodownload.py --version                Display the script version
-  ./autodownload.py --run --debug            Enable debugging and verbose logging
-  ./autodownload.py --run --log-file PATH    Use a separate log file
+  ./autodownload.py --run --debug            Enable debug output without enabling file logging
+  ./autodownload.py --run --log              Enable file logging
+  ./autodownload.py --run --log-file PATH    Enable file logging at the specified path
+  AUTODOWNLOAD_LOG=1 ./autodownload.py --run  Enable file logging via the environment
+  Windows (PowerShell): $env:AUTODOWNLOAD_LOG = '1'
 
 Format of plugins/NAME.json (// and /* ... */ comments are supported):
   type          Source type (default: 1):
@@ -1903,7 +1915,7 @@ Download logic:
   the filename is obtained from Content-Disposition or the rscd and
   response-content-disposition parameters. Files are downloaded only through aria2c.
   After a successful download, cleanup is performed according to the corresponding rules.
-  Each run overwrites its log file at startup after acquiring the file lock.
+  When file logging is enabled, each run overwrites its log file at startup after acquiring the file lock.
   Separate log files do not interfere with concurrent runs.
 """
 PLUGIN_HELP += "\nDEFAULT_ARIA2: " + ", ".join(f"{key}={value}" for key, value in DEFAULT_ARIA2.items()) + "\n"
@@ -1923,11 +1935,12 @@ def main():
     parser.add_argument("--run", nargs="*", action="append", metavar="NAME", help="Run all or selected plugins")
     parser.add_argument("--list", action="store_true", help="List plugins")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--log", action="store_true", help="Enable file logging (disabled by default)")
     parser.add_argument("--rename", action="store_true", help="Rename files containing ? in their names")
     parser.add_argument(
         "--log-file",
         default=None,
-        help="Log file path (defaults to a separate log file for --run NAME)",
+        help="Enable file logging at the specified path",
     )
     args = parser.parse_args()
     try:
@@ -1956,5 +1969,5 @@ if __name__ == "__main__":
     try:
         main()
     except OSError as error:
-        print(f"ERROR: Cannot write log file: {error}", file=sys.stderr)
+        print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)
