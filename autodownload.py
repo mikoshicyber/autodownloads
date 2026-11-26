@@ -1,14 +1,16 @@
 #!/usr/bin/python3
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
 from datetime import datetime
+import ctypes
+from ctypes import wintypes
 import errno
-import fcntl
 import hashlib
 import json
+import ntpath
 import os
 import re
 import socket
@@ -24,9 +26,13 @@ import bs4
 import requests
 from natsort import natsorted
 
+if os.name != "nt":
+    import fcntl
+
 DEBUG = False
-SCRIPT_VERSION = "2026.11.24.1"
-workdir = "/mnt/hdd1/shares/autodownloads/"
+SCRIPT_VERSION = "2026.11.26.3"
+DEFAULT_DOWNLOAD_DIRECTORY = "/mnt/hdd1/shares/autodownloads/"
+workdir = os.path.abspath(os.path.expanduser(os.environ.get("AUTODOWNLOAD_DIR") or DEFAULT_DOWNLOAD_DIRECTORY))
 STAGING_DIRECTORY = os.path.join(workdir, ".autodownload-stage")
 blacklist = []
 plugins_directory = os.path.join(sys.path[0], "plugins")
@@ -107,30 +113,74 @@ class TeeStream:
 
 
 @contextmanager
+def windows_named_lock(identity, scopes):
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel32.CreateMutexW
+    create.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+    create.restype = wintypes.HANDLE
+    wait = kernel32.WaitForSingleObject
+    wait.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    wait.restype = wintypes.DWORD
+    release = kernel32.ReleaseMutex
+    release.argtypes = (wintypes.HANDLE,)
+    release.restype = wintypes.BOOL
+    close = kernel32.CloseHandle
+    close.argtypes = (wintypes.HANDLE,)
+    close.restype = wintypes.BOOL
+    acquired = []
+    try:
+        normalized = os.path.normcase(os.path.realpath(identity))
+        for scope in sorted(set(scopes)):
+            identifier = hashlib.sha256(os.fsencode(normalized + "\0" + scope)).hexdigest()
+            handle = create(None, False, f"Global\\autodownload-{identifier}")
+            if not handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            acquired.append((handle, False))
+            result = wait(handle, 0xFFFFFFFF)
+            if result not in (0, 0x80):
+                raise RuntimeError(f"Cannot acquire autodownload mutex for {scope}: {ctypes.get_last_error()}")
+            acquired[-1] = (handle, True)
+        yield
+    finally:
+        for handle, owned in reversed(acquired):
+            if owned:
+                release(handle)
+            close(handle)
+
+
+@contextmanager
 def capture_log(path):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", buffering=1) as logfile:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        os.ftruncate(fd, 0)
-        os.lseek(fd, 0, os.SEEK_SET)
-        original_stdout, original_stderr = sys.stdout, sys.stderr
-        sys.stdout = TeeStream(original_stdout, logfile)
-        sys.stderr = TeeStream(original_stderr, logfile)
-        try:
-            print(f"INFO: Run started at {datetime.now().astimezone().isoformat(timespec='seconds')}")
-            print(f"INFO: Log file: {path}")
-            print(f"INFO: Script version: {SCRIPT_VERSION}")
-            yield
-        finally:
-            sys.stdout.flush()
-            sys.stderr.flush()
-            sys.stdout, sys.stderr = original_stdout, original_stderr
+    lock = windows_named_lock(path, ("log",)) if os.name == "nt" else nullcontext()
+    with lock:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", buffering=1) as logfile:
+            if os.name != "nt":
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            original_stdout, original_stderr = sys.stdout, sys.stderr
+            sys.stdout = TeeStream(original_stdout, logfile)
+            sys.stderr = TeeStream(original_stderr, logfile)
+            try:
+                print(f"INFO: Run started at {datetime.now().astimezone().isoformat(timespec='seconds')}")
+                print(f"INFO: Log file: {path}")
+                print(f"INFO: Script version: {SCRIPT_VERSION}")
+                print(f"INFO: Download directory: {workdir}")
+                yield
+            finally:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                sys.stdout, sys.stderr = original_stdout, original_stderr
 
 
 @contextmanager
 def exclusive_lock(script_path, scopes):
     script_path = os.path.realpath(script_path)
     requested = sorted(set(scopes)) or ["plugin:__empty__"]
+    if os.name == "nt":
+        with windows_named_lock(script_path, requested):
+            yield
+        return
     addresses = [
         (scope, b"\0autodownload-" + hashlib.sha256(os.fsencode(script_path + "\0" + scope)).hexdigest().encode("ascii"))
         for scope in requested
@@ -1112,7 +1162,7 @@ def filename_has_version(filename, rules=()):
 def replace_completed_download(source, destination):
     old = os.stat(destination, follow_symlinks=False)
     new = os.stat(source, follow_symlinks=False)
-    if (old.st_uid, old.st_gid) != (new.st_uid, new.st_gid):
+    if os.name != "nt" and (old.st_uid, old.st_gid) != (new.st_uid, new.st_gid):
         os.chown(source, old.st_uid, old.st_gid)
     os.chmod(source, stat.S_IMODE(old.st_mode))
     os.replace(source, destination)
@@ -1418,7 +1468,8 @@ def download_all(items, failures=None):
     if os.path.islink(STAGING_DIRECTORY):
         raise ValueError(f"Staging directory must not be a symlink: {STAGING_DIRECTORY}")
     os.makedirs(STAGING_DIRECTORY, exist_ok=True)
-    os.chmod(STAGING_DIRECTORY, 0o777)
+    if os.name != "nt":
+        os.chmod(STAGING_DIRECTORY, 0o777)
     successful = True
     items, staged = plan_downloads(items, STAGING_DIRECTORY, failures)
     if not items:
@@ -1471,13 +1522,13 @@ def create_plugin(filename="plugin"):
         print("ERROR file already exists", file_path)
         sys.exit(1)
     data = r'''{
-  // type: 0 — прямой URL; 1 — HTML/GitHub/SourceForge; 2 — URL из JSON; 3 — рекурсивный поиск по каталогам.
+  // type: 0 - direct URL; 1 - HTML/GitHub/SourceForge; 2 - URL from JSON; 3 - recursive directory search.
   "type": 1,
 
-  // url: страница поиска, GitHub releases URL, прямой файл для type=0 или JSON endpoint для type=2.
+  // url: search page, GitHub Releases URL, direct file URL for type=0, or JSON endpoint for type=2.
   "url": "https://github.com/owner/repo/releases/latest",
 
-  // rules: список regexp для имени файла. Проверяется basename найденной ссылки через re.match().
+  // rules: list of regular expressions for filenames. The basename of each discovered URL is checked using re.match().
   "rules": [
     ".*linux.*amd64.*\\.tar\\.gz$"
   ],
@@ -1489,21 +1540,21 @@ def create_plugin(filename="plugin"):
   "max_depth": 3,
   "max_pages": 100,
 
-  // path: используется только при type=2. Элементы списка — ключи dict или индексы list.
+  // path: used only for type=2. List elements are dictionary keys or list indices.
   "path": ["assets", 0, "browser_download_url"],
 
-  // tail: сколько последних ссылок после natural sort брать. 1 — только последнюю, 0 — все найденные.
+  // tail: number of last URLs to select after natural sorting. 1 - latest only, 0 - all discovered URLs.
   "tail": 1,
 
-  // out: принудительное имя локального файла. Если пусто, имя берётся из URL или конечной ссылки HTTP-редиректа.
+  // out: override the local filename. If empty, the filename is taken from the URL or the final HTTP redirect URL.
   "out": "",
 
-  // proxy: индивидуальный HTTP proxy только для этого плагина. Пустая строка — без proxy.
-  // Простой вариант: "http://user:pass@proxy.example.org:8080".
-  // Расширенный вариант: {"all": "http://proxy:8080", "no_proxy": "localhost,127.0.0.1"}.
+  // proxy: HTTP proxy for this plugin only. An empty string disables the proxy.
+  // Simple format: "http://user:pass@proxy.example.org:8080".
+  // Extended format: {"all": "http://proxy:8080", "no_proxy": "localhost,127.0.0.1"}.
   "proxy": "",
 
-  // aria2: опциональные настройки скачивания для файлов этого плагина.
+  // aria2: optional download settings for files managed by this plugin.
   "aria2": {
     "split": 4,
     "max_connection_per_server": 4,
@@ -1738,107 +1789,122 @@ def run(args):
             sys.exit(1)
 
 
-PLUGIN_HELP = """Режимы работы:
-  ./autodownload.py                          Скачать обновления всех плагинов
-  ./autodownload.py --run                    То же самое
-  ./autodownload.py --run ИМЯ                Запустить только plugins/ИМЯ.json
-  ./autodownload.py --run ИМЯ1 ИМЯ2          Запустить несколько выбранных плагинов
-  ./autodownload.py --run ИМЯ1 --run ИМЯ2    То же, через повторение --run
-  Разные плагины запускаются параллельно в отдельных процессах.
-  При совпадении хотя бы одного плагина второй запуск ожидает завершения
-  первого, а не завершается с ошибкой блокировки.
-  Совпадающие файлы защищены отдельной блокировкой загрузки.
-  --run ИМЯ создаёт отдельный журнал autodownload.ИМЯ.log; общий запуск
-  использует autodownload.log. --log-file задаёт явный путь к журналу.
-  Одновременная запись в один явно заданный лог-файл сериализуется.
-  ./autodownload.py --list                   Показать имена плагинов
-  ./autodownload.py --create [ИМЯ]           Создать шаблон JSON (по умолчанию plugin)
-  ./autodownload.py --edit [ИМЯ]             Открыть JSON через $EDITOR (если задан); создать, если нет
-  ./autodownload.py --clear                  Очистить старые версии по rules
-                Только завершённые версионные файлы основного каталога,
-                отдельно для каждого семейства имён и архитектуры.
-                Файлы без версии, .aria2 и .autodownload-stage не удаляются.
-  ./autodownload.py --rename                 Убрать часть имени после знака ?
-  ./autodownload.py --version                Вывести версию скрипта
-  ./autodownload.py --run --debug            Отладка и подробное логирование
-  ./autodownload.py --run --log-file ПУТЬ    Использовать отдельный лог-файл
+PLUGIN_HELP = """Download directory:
+  AUTODOWNLOAD_DIR  Destination directory path (absolute or relative).
+                    If unset, defaults to /mnt/hdd1/shares/autodownloads/.
+                    Relative paths are resolved against the current working directory.
+                    On Windows, AUTODOWNLOAD_DIR must be explicitly specified.
+                    Windows: C:\\Downloads, D:/Downloads, \\\\server\\share\\Downloads.
+                    Linux: /mnt/hdd1/shares/autodownloads or ~/Downloads.
+                    Paths are interpreted by the current operating system; Windows paths
+                    cannot be used on Linux without the corresponding mount.
+                    .autodownload-stage/ is created in the same directory.
+                    Linux example: AUTODOWNLOAD_DIR=/mnt/hdd1/shares/autodownloads ./autodownload.py --run
+                    Windows example (PowerShell): $env:AUTODOWNLOAD_DIR = 'D:\\Downloads'
+                    On Windows and Linux, aria2c and curl must be available in PATH.
 
-Формат plugins/ИМЯ.json (допускаются комментарии // и /* ... */):
-  type          Тип источника (по умолчанию 1):
-                0 — прямая ссылка на файл;
-                1 — ссылки из HTML, GitHub Releases либо SourceForge;
-                2 — URL из JSON по path;
-                3 — обход вложенных каталогов с двумя регулярными выражениями.
-  url           Адрес файла, HTML-страницы или JSON API.
-  rules         Массив regex для имён файлов (re.match, без учёта регистра).
-                Используется в типах 1 и 3, а также для очистки старых версий.
-  tail          Взять N последних найденных ссылок после natural sort; 0 — все.
-  path          Для type=2: последовательность ключей JSON и/или индексов массива.
-  out           Принудительное имя локального файла; пусто — имя из URL
-                или конечного URL HTTP-редиректа (через curl).
-  proxy         Прокси для конкретного плагина: строка URL либо объект
-                с ключами all, http, https, ftp, no_proxy.
-  aria2         Объект с настройками aria2c для скачиваемых файлов.
+Operating modes:
+  ./autodownload.py                          Download updates for all plugins
+  ./autodownload.py --run                    Same as above
+  ./autodownload.py --run NAME               Run only plugins/NAME.json
+  ./autodownload.py --run NAME1 NAME2        Run multiple selected plugins
+  ./autodownload.py --run NAME1 --run NAME2  Same as above, using repeated --run options
+  Different plugins run concurrently in separate processes.
+  If at least one plugin overlaps, the second invocation waits for the first
+  to finish instead of failing with a lock error.
+  Overlapping files are protected by a separate download lock.
+  --run NAME creates a separate autodownload.NAME.log; a general run
+  uses autodownload.log. --log-file specifies an explicit log file path.
+  Concurrent writes to the same explicitly specified log file are serialized.
+  Linux: Unix sockets and flock; Windows: system-wide named mutexes.
+  ./autodownload.py --list                   List plugin names
+  ./autodownload.py --create [NAME]          Create a JSON template (default: plugin)
+  ./autodownload.py --edit [NAME]            Open JSON using $EDITOR (if set); create it if missing
+  ./autodownload.py --clear                  Remove older versions according to rules
+                Only completed versioned files in the main directory are removed,
+                separately for each filename family and architecture.
+                Unversioned files, .aria2 files, and .autodownload-stage are not removed.
+  ./autodownload.py --rename                 Remove the filename portion after the ? character
+  ./autodownload.py --version                Display the script version
+  ./autodownload.py --run --debug            Enable debugging and verbose logging
+  ./autodownload.py --run --log-file PATH    Use a separate log file
 
-Дополнительные поля type=3:
-  search_regex  Обязательный regex для поиска каталогов (re.search).
-                На каждой глубине проверяются имя и путь каталога.
-  search_tail   Сколько последних подходящих каталогов обходить на уровне;
-                0 — все (по умолчанию 0).
-                Ссылки ?stats= и ?mirrorlist= исключаются из поиска файлов.
-  max_depth     Максимальная глубина обхода от исходного URL (по умолчанию 3).
-  max_pages     Лимит прочитанных HTML-страниц (по умолчанию 100).
+Format of plugins/NAME.json (// and /* ... */ comments are supported):
+  type          Source type (default: 1):
+                0 - direct file URL;
+                1 - links from HTML, GitHub Releases, or SourceForge;
+                2 - URL from JSON using path;
+                3 - recursive directory traversal using two regular expressions.
+  url           File, HTML page, or JSON API URL.
+  rules         Array of regular expressions for filenames (case-insensitive re.match).
+                Used for types 1 and 3 and for removing older versions.
+  tail          Select the last N discovered URLs after natural sorting; 0 - all.
+  path          For type=2: sequence of JSON keys and/or array indices.
+  out           Override the local filename; if empty, use the filename from the URL
+                or the final HTTP redirect URL (using curl).
+  proxy         Plugin-specific proxy: a URL string or an object
+                with all, http, https, ftp, and no_proxy keys.
+  aria2         Object containing aria2c settings for downloaded files.
 
-Служебные поля плагина:
-  request_connect_timeout  Тайм-аут подключения при обнаружении ссылок, сек (10).
-  request_read_timeout     Тайм-аут чтения HTML/JSON, сек (45).
-  request_retries          Повторные попытки HTTP-запросов (2).
-  request_retry_wait       Начальная задержка повторов, сек (2).
-  sourceforge_mirror       Имя зеркала SourceForge для параметра use_mirror.
-  sourceforge_platform     Не ограничивает latest/download; нужна прямая
-                           ссылка на нужную платформу или фильтр rules.
+Additional fields for type=3:
+  search_regex  Required regular expression for directory discovery (re.search).
+                The directory name and path are checked at each depth.
+  search_tail   Number of last matching directories to scan at each level;
+                0 - all (default: 0).
+                Links with ?stats= and ?mirrorlist= are excluded from file discovery.
+  max_depth     Maximum traversal depth from the initial URL (default: 3).
+  max_pages     Maximum number of HTML pages to read (default: 100).
 
-Поля объекта aria2 (имена с дефисами также поддерживаются):
-  split / s                     Число частей одного файла.
-  max_connection_per_server / x Число соединений с сервером.
-  max_tries                     Максимум попыток.
-  retry_wait                    Интервал между попытками, сек.
-  connect_timeout               Тайм-аут подключения, сек.
-  timeout                       Тайм-аут ожидания данных, сек.
-  max_concurrent_downloads / j  Число одновременно скачиваемых файлов.
-  auto_save_interval            Интервал сохранения .aria2 во временном каталоге.
-  min_split_size                Минимальный размер части.
-  file_allocation               Метод выделения места на диске.
-  lowest_speed_limit            Ограничение минимальной скорости.
-  user_agent / referer          HTTP User-Agent и Referer.
-  conditional_get               Условный HTTP-запрос.
-  content_disposition_default_utf8  UTF-8 для Content-Disposition.
-  no_want_digest_header         Не запрашивать Digest в заголовках.
-  http_accept_gzip              Принимать сжатый HTTP-ответ.
-  out                           Переопределить имя выходного файла.
+Advanced plugin fields:
+  request_connect_timeout  Connection timeout during link discovery, seconds (10).
+  request_read_timeout     HTML/JSON read timeout, seconds (45).
+  request_retries          Number of HTTP request retries (2).
+  request_retry_wait       Initial retry delay, seconds (2).
+  sourceforge_mirror       SourceForge mirror name for the use_mirror parameter.
+  sourceforge_platform     Does not constrain latest/download; a direct URL
+                           for the desired platform or a rules filter is required.
 
-Логика скачивания:
-  Версионные файлы скачиваются aria2c в целевой каталог; существующие
-  завершённые версии пропускаются (MSI проверяется по сигнатуре).
-  Некорректные MSI и HTML-страницы вместо файлов сохраняются в
-  .autodownload-stage/.invalid/ и не считаются успешной загрузкой.
-  Для aria2c всегда закрепляется имя выходного файла, чтобы редиректы
-  не создавали посторонние файлы (например, теги GitHub вместо EXE).
-  Сами страницы GitHub Releases и редиректы на них отклоняются как не-файлы.
-  Файлы без версии загружаются в постоянный .autodownload-stage/,
-  затем сравниваются по SHA-256 и заменяются только
-  при изменении содержимого. Для GitHub Releases запрашивается digest
-  sha256 через API; совпадающий локальный файл пропускается без загрузки.
-  Если digest доступен, целостность скачанного файла проверяется по SHA-256.
-  Если digest отсутствует или API недоступен, действует прежняя схема.
-  Если исходная прямая ссылка без имени файла
-  (например, AIMP ?do=download.file), curl определяет конечный URL и имя.
-  Для ссылок с непрозрачным путём (например, GitHub assets для Calibre)
-  имя берётся из Content-Disposition либо параметров rscd и
-  response-content-disposition. Файлы скачиваются только через aria2c.
-  После успешной загрузки выполняется очистка по соответствующему rules.
-  Лог-файл каждого запуска при старте перезаписывается после получения
-  файловой блокировки. Отдельные журналы не мешают параллельным запускам.
+Fields of the aria2 object (hyphenated names are also supported):
+  split / s                     Number of parts per file.
+  max_connection_per_server / x Number of connections per server.
+  max_tries                     Maximum number of attempts.
+  retry_wait                    Interval between attempts, seconds.
+  connect_timeout               Connection timeout, seconds.
+  timeout                       Data transfer timeout, seconds.
+  max_concurrent_downloads / j  Number of simultaneous downloads.
+  auto_save_interval            .aria2 control file save interval in the staging directory.
+  min_split_size                Minimum part size.
+  file_allocation               Disk space allocation method.
+  lowest_speed_limit            Minimum download speed limit.
+  user_agent / referer          HTTP User-Agent and Referer.
+  conditional_get               Conditional HTTP request.
+  content_disposition_default_utf8  UTF-8 for Content-Disposition.
+  no_want_digest_header         Do not request the Digest header.
+  http_accept_gzip              Accept compressed HTTP responses.
+  out                           Override the output filename.
+
+Download logic:
+  Versioned files are downloaded by aria2c to the destination directory; existing
+  completed versions are skipped (MSI files are checked by signature).
+  Invalid MSI files and HTML pages returned instead of files are stored in
+  .autodownload-stage/.invalid/ and are not treated as successful downloads.
+  The output filename is always explicitly set for aria2c to prevent redirects
+  from creating unintended files (for example, GitHub tags instead of EXE files).
+  GitHub Releases pages and redirects to them are rejected as non-file URLs.
+  Unversioned files are downloaded to the persistent .autodownload-stage/ directory,
+  then compared using SHA-256 and replaced only
+  if their contents have changed. For GitHub Releases, the SHA-256 digest
+  is requested through the API; matching local files are skipped without downloading.
+  If a digest is available, downloaded file integrity is verified using SHA-256.
+  If the digest is missing or the API is unavailable, the previous logic applies.
+  If the original direct URL does not contain a filename
+  (for example, AIMP ?do=download.file), curl determines the final URL and filename.
+  For URLs with opaque paths (for example, GitHub assets for Calibre),
+  the filename is obtained from Content-Disposition or the rscd and
+  response-content-disposition parameters. Files are downloaded only through aria2c.
+  After a successful download, cleanup is performed according to the corresponding rules.
+  Each run overwrites its log file at startup after acquiring the file lock.
+  Separate log files do not interfere with concurrent runs.
 """
 PLUGIN_HELP += "\nDEFAULT_ARIA2: " + ", ".join(f"{key}={value}" for key, value in DEFAULT_ARIA2.items()) + "\n"
 
@@ -1846,25 +1912,30 @@ def main():
     parser = argparse.ArgumentParser(
         add_help=False,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Загрузка и обновление файлов по JSON-плагинам через aria2c.",
+        description="Download and update files using JSON plugins and aria2c.",
         epilog=PLUGIN_HELP,
     )
-    parser.add_argument("-h", "--help", action="help", help="Показать режимы работы и поля плагинов")
+    parser.add_argument("-h", "--help", action="help", help="Show operating modes and plugin fields")
     parser.add_argument("--version", action="version", version=f"%(prog)s {SCRIPT_VERSION}")
-    parser.add_argument("--create", nargs="?", const="plugin", help="Создать plugin")
-    parser.add_argument("--edit", nargs="?", const="plugin", help="Редактировать plugin")
-    parser.add_argument("--clear", action="store_true", help="Очистить старые файлы")
-    parser.add_argument("--run", nargs="*", action="append", metavar="ИМЯ", help="Запустить все или выбранные плагины")
-    parser.add_argument("--list", action="store_true", help="Вывести список плагинов")
-    parser.add_argument("--debug", action="store_true", help="Режим отладки")
-    parser.add_argument("--rename", action="store_true", help="Переименовать файлы с ? в имени")
+    parser.add_argument("--create", nargs="?", const="plugin", help="Create a plugin")
+    parser.add_argument("--edit", nargs="?", const="plugin", help="Edit a plugin")
+    parser.add_argument("--clear", action="store_true", help="Remove older files")
+    parser.add_argument("--run", nargs="*", action="append", metavar="NAME", help="Run all or selected plugins")
+    parser.add_argument("--list", action="store_true", help="List plugins")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--rename", action="store_true", help="Rename files containing ? in their names")
     parser.add_argument(
         "--log-file",
         default=None,
-        help="Путь к лог-файлу (по умолчанию отдельный для --run ИМЯ)",
+        help="Log file path (defaults to a separate log file for --run NAME)",
     )
     args = parser.parse_args()
     try:
+        configured_dir = os.environ.get("AUTODOWNLOAD_DIR", "").strip()
+        if os.name == "nt" and not configured_dir and not (args.list or args.create is not None or args.edit is not None):
+            raise RuntimeError("Set AUTODOWNLOAD_DIR to a Windows path; the default directory is Linux-specific")
+        if os.name != "nt" and (ntpath.splitdrive(configured_dir)[0] or configured_dir.startswith("\\\\")):
+            raise RuntimeError("AUTODOWNLOAD_DIR contains a Windows path; use a mounted Linux path instead")
         names = run_lock_names(args)
         scopes = ["plugin:" + name for name in names]
         if args.run is None and (args.create is not None or args.edit is not None or args.list):
