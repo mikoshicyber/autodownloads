@@ -1,4 +1,5 @@
 # Autodownload
+[English](README.md) | [Русский](README.ru.md)
 
 `autodownload.py` is a JSON plugin-based file downloader and updater for Linux and Windows. The script discovers current links to installers and other artifacts, downloads files using `aria2c`, resumes interrupted downloads, and removes older completed versions according to plugin rules.
 
