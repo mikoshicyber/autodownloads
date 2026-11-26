@@ -1,5 +1,4 @@
 # Autodownload
-[English](README.md) | [Русский](README.ru.md)
 
 `autodownload.py` is a JSON plugin-based file downloader and updater for Linux and Windows. The script discovers current links to installers and other artifacts, downloads files using `aria2c`, resumes interrupted downloads, and removes older completed versions according to plugin rules.
 
@@ -78,6 +77,7 @@ Example project structure:
 ```text
 /scripts/
 ├── autodownload.py
+├── autodownload.bash
 ├── requirements.txt
 ├── plugins/
 │   ├── ollama.json
@@ -115,7 +115,7 @@ The commands below assume Linux, `/scripts` as the current directory, and an exe
 | `./autodownload.py --clear` | Remove older completed versions according to `rules` |
 | `./autodownload.py --rename` | Remove the filename portion after the `?` character |
 | `./autodownload.py --version` | Display the script version |
-| `./autodownload.py --help` | Display the complete built-in help |
+| `./autodownload.py --help` / `./autodownload.py -h` | Display the complete built-in help |
 
 Additional options:
 
@@ -129,6 +129,44 @@ AUTODOWNLOAD_LOG=1 ./autodownload.py --run ollama
 `--debug` enables detailed discovery and download planning messages without enabling file logging. File logging is disabled by default; existing log files are left untouched. Use `--log`, `--log-file PATH`, or set `AUTODOWNLOAD_LOG=1` to enable it. The environment variable also accepts `true`, `yes`, or `on` (case-insensitive); other values, including `0`, leave file logging disabled unless a logging option is supplied. On Windows (PowerShell), use `$env:AUTODOWNLOAD_LOG = '1'`. `--log-file` enables logging and takes precedence over the default log path; the log directory must already exist.
 
 > **Warning:** `--clear` immediately removes matching older files. There is no separate `--dry-run` mode in this version. `--rename` also changes filenames in subdirectories of the download directory.
+
+### Bash completion
+
+The `autodownload.bash` file provides completion for all command-line options of `autodownload.py`, including `-h`, `--help`, `--version`, `--create`, `--edit`, `--clear`, `--run`, `--list`, `--debug`, `--log`, `--rename`, and `--log-file`. It requires Bash 4+ and GNU `readlink` (provided by `coreutils` on Linux). No Python process, plugin parsing, or network requests are required for completion.
+
+To enable completion in the current Bash session:
+
+```bash
+cd /scripts
+source ./autodownload.bash
+```
+
+To enable it automatically in future sessions, add `source /scripts/autodownload.bash` to `~/.bashrc`. For system-wide installation on Debian/Ubuntu, run the following commands as root or with `sudo`:
+
+```bash
+apt-get install -y bash-completion
+install -m 0644 /scripts/autodownload.bash /etc/bash_completion.d/autodownload
+```
+
+The system-wide configuration is loaded by `bash-completion` in new interactive Bash sessions where that package is enabled. To use it immediately, source the file as shown above.
+
+Examples (`<TAB>` means pressing Tab):
+
+```text
+./autodownload.py --<TAB>
+./autodownload.py --run <TAB>
+./autodownload.py --run ollama <TAB>
+./autodownload.py --run ollama --run <TAB>
+./autodownload.py --edit <TAB>
+./autodownload.py --create pl<TAB>
+./autodownload.py --log-file /tmp/<TAB>
+./autodownload.py --run=ol<TAB>
+```
+
+- `--run` and `--edit` complete existing plugin names from the `plugins/` directory next to the resolved script, including when called through a symbolic link. `--run` also accepts multiple plugin names and repeated `--run` options.
+- `--create` suggests the default name `plugin` only if `plugin.json` does not exist; enter any new name manually. Existing plugin names are not suggested for creation.
+- `--log-file` completes local files and directories. A new log filename can be entered manually.
+- Completion works for direct invocations (`./autodownload.py`, `/scripts/autodownload.py`, or `autodownload.py` in `PATH`). It does not override completion for `python`, `python3`, or other interpreters, including explicit `venv` interpreter invocations.
 
 ### Concurrent runs
 

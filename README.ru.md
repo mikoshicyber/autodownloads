@@ -77,6 +77,7 @@ command -v curl
 ```text
 /scripts/
 ├── autodownload.py
+├── autodownload.bash
 ├── requirements.txt
 ├── plugins/
 │   ├── ollama.json
@@ -114,7 +115,7 @@ command -v curl
 | `./autodownload.py --clear` | Удалить старые завершённые версии по `rules` |
 | `./autodownload.py --rename` | Удалить часть имени после символа `?` |
 | `./autodownload.py --version` | Версия скрипта |
-| `./autodownload.py --help` | Полная встроенная справка |
+| `./autodownload.py --help` / `./autodownload.py -h` | Полная встроенная справка |
 
 Дополнительные параметры:
 
@@ -128,6 +129,44 @@ AUTODOWNLOAD_LOG=1 ./autodownload.py --run ollama
 `--debug` включает подробные сообщения поиска и планирования загрузок, но не включает запись в файл. Файловое логирование по умолчанию отключено; существующие журналы не изменяются. Для включения используйте `--log`, `--log-file PATH` или переменную `AUTODOWNLOAD_LOG=1`. Переменная также принимает значения `true`, `yes` и `on` без учёта регистра; остальные значения, включая `0`, не включают запись в файл без соответствующего ключа. На Windows (PowerShell) используйте `$env:AUTODOWNLOAD_LOG = '1'`. `--log-file` включает логирование и задаёт путь к журналу вместо пути по умолчанию; каталог для журнала должен существовать.
 
 > **Внимание:** `--clear` сразу удаляет подходящие старые файлы. Отдельного режима `--dry-run` в текущей версии нет. `--rename` также изменяет имена файлов, в том числе в подкаталогах каталога загрузок.
+
+### Автодополнение Bash
+
+Файл `autodownload.bash` обеспечивает автодополнение всех параметров командной строки `autodownload.py`, включая `-h`, `--help`, `--version`, `--create`, `--edit`, `--clear`, `--run`, `--list`, `--debug`, `--log`, `--rename` и `--log-file`. Требуются Bash 4+ и GNU `readlink` (в Linux входит в `coreutils`). Для автодополнения не требуется запускать Python, разбирать содержимое плагинов или обращаться к сети.
+
+Для включения в текущей сессии Bash:
+
+```bash
+cd /scripts
+source ./autodownload.bash
+```
+
+Для автоматического включения в следующих сессиях добавьте `source /scripts/autodownload.bash` в `~/.bashrc`. Для системной установки в Debian/Ubuntu выполните следующие команды от `root` или через `sudo`:
+
+```bash
+apt-get install -y bash-completion
+install -m 0644 /scripts/autodownload.bash /etc/bash_completion.d/autodownload
+```
+
+Системная конфигурация загружается пакетом `bash-completion` в новых интерактивных сессиях Bash, в которых этот пакет активирован. Для немедленного включения подключите файл, как показано выше.
+
+Примеры (`<TAB>` означает нажатие Tab):
+
+```text
+./autodownload.py --<TAB>
+./autodownload.py --run <TAB>
+./autodownload.py --run ollama <TAB>
+./autodownload.py --run ollama --run <TAB>
+./autodownload.py --edit <TAB>
+./autodownload.py --create pl<TAB>
+./autodownload.py --log-file /tmp/<TAB>
+./autodownload.py --run=ol<TAB>
+```
+
+- `--run` и `--edit` дополняют имена существующих плагинов из каталога `plugins/` рядом с фактическим файлом скрипта, в том числе при запуске через символическую ссылку. Для `--run` поддерживается несколько имён и повторное указание ключа.
+- `--create` предлагает имя по умолчанию `plugin`, только если файл `plugin.json` отсутствует; произвольное новое имя вводится вручную. Существующие имена плагинов при создании не предлагаются.
+- `--log-file` дополняет пути к локальным файлам и каталогам. Имя нового журнала можно ввести вручную.
+- Автодополнение работает при прямом вызове (`./autodownload.py`, `/scripts/autodownload.py` или `autodownload.py` из `PATH`). Автодополнение команд `python`, `python3` и других интерпретаторов, включая явный вызов интерпретатора из `venv`, не переопределяется.
 
 ### Параллельные запуски
 
