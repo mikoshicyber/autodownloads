@@ -1,13 +1,7 @@
 {
   "url": "https://github.com/TypesettingTools/Aegisub/releases/latest",
   "rules": [
-    "Aegisub-[\\d.]+.exe"
-  ],
-  "path": [
-    "json",
-    1,
-    "path",
-    "type 2 only"
+    "Aegisub-v?[\\d.]+-x64.exe"
   ],
   "type": 1,
   "tail": 1

@@ -1,6 +1,6 @@
 {
   "url": "https://web.mit.edu/kerberos/dist/",
   "type": 1,
-  "rules": ["kfw-[\\d.]+-amd64.msi","kfw-[\\d.]+-i386.msi"],
+  "rules": ["kfw-[\\d.]+.msi"],
   "tail": 2
 }

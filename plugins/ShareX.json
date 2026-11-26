@@ -1,6 +1,8 @@
 {
   "url": "https://github.com/ShareX/ShareX/releases/latest",
+  "rules": [
+    "ShareX-[\\d.]+-setup-x64.exe"
+  ],
   "type": 1,
-  "rules": ["ShareX-[\\d.]-setup-x64.exe$"],
   "tail": 1
 }
