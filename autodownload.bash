@@ -1,6 +1,6 @@
 _autodownload_complete() {
     local cur="${2-}" mode="" prefix="" word option script directory path name i
-    local -a options=(-h --help --version --create --edit --clear --run --list --debug --log --rename --log-file)
+    local -a options=(-h --help --version --create --create-tui --edit --clear --run --list --debug --log --rename --log-file)
     COMPREPLY=()
 
     for ((i = 1; i < COMP_CWORD; i++)); do
