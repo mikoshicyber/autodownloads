@@ -7,23 +7,23 @@ _autodownload_complete() {
         word="${COMP_WORDS[i]}"
         case "$word" in
             --) return 0 ;;
-            --run|--create|--edit|--log-file) mode="$word" ;;
+            --run|--clear|--create|--edit|--log-file) mode="$word" ;;
             --*) mode="" ;;
             -h) mode="" ;;
             '=')
                 case "$mode" in
-                    --run|--create|--edit|--log-file) mode="${mode}=" ;;
+                    --run|--clear|--create|--edit|--log-file) mode="${mode}=" ;;
                     *) mode="" ;;
                 esac
                 ;;
             *)
-                [[ "$mode" == --run ]] || mode=""
+                [[ "$mode" == --run || "$mode" == --clear ]] || mode=""
                 ;;
         esac
     done
 
     case "$cur" in
-        --run=*|--create=*|--edit=*|--log-file=*)
+        --run=*|--clear=*|--create=*|--edit=*|--log-file=*)
             prefix="${cur%%=*}="
             mode="$prefix"
             cur="${cur#*=}"
@@ -31,7 +31,7 @@ _autodownload_complete() {
     esac
     if [[ "${COMP_WORDS[COMP_CWORD]-}" == '=' ]]; then
         case "$mode" in
-            --run|--create|--edit|--log-file) mode="${mode}=" ;;
+            --run|--clear|--create|--edit|--log-file) mode="${mode}=" ;;
         esac
         cur=""
     fi
@@ -62,7 +62,7 @@ _autodownload_complete() {
     fi
 
     case "$mode" in
-        --run|--run=|--create|--create=|--edit|--edit=)
+        --run|--run=|--clear|--clear=|--create|--create=|--edit|--edit=)
             script="$1"
             if [[ "$script" == *\\* ]]; then
                 IFS= read script <<< "$script"

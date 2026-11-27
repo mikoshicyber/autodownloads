@@ -2,7 +2,7 @@
 
 `autodownload.py` is a JSON plugin-based file downloader and updater for Linux and Windows. The script discovers current links to installers and other artifacts, downloads files using `aria2c`, resumes interrupted downloads, and removes older completed versions according to plugin rules.
 
-This documentation applies to script version **`2026.11.26.4`**.
+This documentation applies to script version **`2026.11.27.3`**.
 
 ## Features
 
@@ -13,11 +13,11 @@ This documentation applies to script version **`2026.11.26.4`**.
 - For files with fixed names, download to a staging directory and replace only when the SHA-256 hash changes.
 - Check MSI signatures and reject HTML pages incorrectly returned instead of files.
 - Remove outdated versions after successful downloads or manually using `--clear`.
-- Lock concurrent runs by plugin and destination file; optionally maintain separate logs for selected plugins.
+- Protect individual destination files with `.lock` files; optionally maintain separate logs for selected plugins.
 
 ## Requirements
 
-- Linux: `fcntl.flock` and abstract Unix sockets are used for locking; Windows: system-wide named mutexes.
+- Linux and Windows: atomic creation of `.lock` files is used for download locking. Optional log serialization uses `fcntl.flock` on Linux and named mutexes on Windows.
 - Python **3.9+**.
 - Python packages: `requests`, `beautifulsoup4`, `lxml`, and `natsort`.
 - `aria2c` and `curl` utilities available in `PATH`.
@@ -112,7 +112,9 @@ The commands below assume Linux, `/scripts` as the current directory, and an exe
 | `./autodownload.py --list` | List plugin names |
 | `./autodownload.py --create example` | Create the `plugins/example.json` template |
 | `./autodownload.py --edit example` | Open the plugin using `$EDITOR`, if set; create it if missing |
-| `./autodownload.py --clear` | Remove older completed versions according to `rules` |
+| `./autodownload.py --clear` | Remove older completed versions using all plugin rules |
+| `./autodownload.py --clear farmanager` | Remove older versions using only the selected plugin rules |
+| `./autodownload.py --clear farmanager blender` | Remove older versions using multiple selected plugins |
 | `./autodownload.py --rename` | Remove the filename portion after the `?` character |
 | `./autodownload.py --version` | Display the script version |
 | `./autodownload.py --help` / `./autodownload.py -h` | Display the complete built-in help |
@@ -161,16 +163,26 @@ Examples (`<TAB>` means pressing Tab):
 ./autodownload.py --create pl<TAB>
 ./autodownload.py --log-file /tmp/<TAB>
 ./autodownload.py --run=ol<TAB>
+./autodownload.py --clear <TAB>
+./autodownload.py --clear farmanager <TAB>
+./autodownload.py --clear=far<TAB>
+./autodownload.py --clear farmanager --clear <TAB>
 ```
 
-- `--run` and `--edit` complete existing plugin names from the `plugins/` directory next to the resolved script, including when called through a symbolic link. `--run` also accepts multiple plugin names and repeated `--run` options.
+- `--run`, `--clear`, and `--edit` complete existing plugin names from the `plugins/` directory next to the resolved script, including when called through a symbolic link. Both `--run` and `--clear` accept multiple plugin names and repeated options.
 - `--create` suggests the default name `plugin` only if `plugin.json` does not exist; enter any new name manually. Existing plugin names are not suggested for creation.
 - `--log-file` completes local files and directories. A new log filename can be entered manually.
 - Completion works for direct invocations (`./autodownload.py`, `/scripts/autodownload.py`, or `autodownload.py` in `PATH`). It does not override completion for `python`, `python3`, or other interpreters, including explicit `venv` interpreter invocations.
 
 ### Concurrent runs
 
-Different selected plugins can run concurrently. If plugin names overlap, the next run waits until the lock is released; if two plugins target the same destination file, an additional file-specific lock is used. Locks do not create persistent `.lock` files.
+Plugins are processed sequentially within one invocation, while files belonging to the current plugin can be downloaded in parallel. Plugin names and link discovery are no longer locked: separate processes can run the same or different plugins concurrently.
+
+Before downloading, the script atomically creates `<destination>.lock` next to the final file in the main download directory (for example, `OllamaSetup.exe.lock`). This also applies to files downloaded via `.autodownload-stage/`. If the lock exists, the file is skipped immediately without waiting or reporting a download error. Other files continue to be processed. The `.lock` suffix is reserved and cannot be used for download destinations.
+
+The lock contains the owner process PID (`PID=12345`) and is removed on normal completion or handled errors. Forced termination or a power failure can leave a stale lock. It is not removed automatically: check that neither the owning script nor its download process is still writing the file before manually removing the lock. PID reuse and shared directories make the PID alone insufficient to prove that the lock is stale. Do not delete active locks.
+
+Automatic cleanup, `--clear`, and `--rename` skip locked files and acquire file-specific locks before modifying files. Lock markers themselves are never cleaned up or renamed. No plugin-wide or directory-wide download lock is used.
 
 When file logging is enabled and one or more selected plugins are run, the default log is named `autodownload.ollama.log` or `autodownload.blender__ollama.log` (names are sorted). A full run uses `autodownload.log`. When the same `--log-file` is specified, writes are serialized using a file lock on Linux or a named mutex on Windows. **The log is overwritten at the start of each run with file logging enabled**, not appended to.
 
@@ -328,7 +340,7 @@ This snippet shows only the `aria2` object; it must be included within a complet
 
 Additional supported settings include `auto_save_interval`, `min_split_size`, `file_allocation`, `lowest_speed_limit`, `user_agent`, `referer`, `conditional_get`, `content_disposition_default_utf8`, `no_want_digest_header`, `http_accept_gzip`, and `out`. Most options accept both underscore-separated and hyphenated names; the aliases `s`, `x`, and `j` are also available for their corresponding numeric settings.
 
-For SourceForge, the script uses separate default connection and timeout settings; a custom `aria2` object takes precedence. The `max_concurrent_downloads` setting controls the number of parallel download tasks within the script; the maximum of the selected downloads' settings and the default value (`4`) is used.
+For SourceForge, the script uses separate default connection and timeout settings; a custom `aria2` object takes precedence. The `max_concurrent_downloads` setting controls the number of parallel download tasks within the script; the maximum of the current plugin's downloads' settings and the default value (`4`) is used.
 
 ## Downloaded file handling
 
@@ -368,9 +380,14 @@ Manual cleanup:
 
 ```bash
 ./autodownload.py --clear
+./autodownload.py --clear farmanager
+./autodownload.py --clear farmanager blender
+./autodownload.py --clear farmanager --clear blender
 ```
 
-The current implementation considers only files directly inside the main download directory. `.aria2` files, incomplete downloads, files with no identifiable version, and the contents of `.autodownload-stage/` are not removed. If a download fails, previous files are not cleaned up as a result of that download.
+Without names, `--clear` uses all plugin rules. If at least one name is supplied, only the selected plugin rules are used, even when the option is repeated. The `.json` suffix is optional. If any explicitly selected plugin cannot be loaded, cleanup is aborted with a nonzero exit status. Files are selected by `rules`, not download history: overlapping rules can match the same files.
+
+The current implementation considers only files directly inside the main download directory. `.aria2` files, `.lock` markers, files locked by another process, incomplete downloads, files with no identifiable version, and the contents of `.autodownload-stage/` are not removed. If a download fails, previous files are not cleaned up as a result of that download.
 
 Before using `--clear` for the first time, review the current `rules` in the plugins and back up the directory if it contains important files.
 

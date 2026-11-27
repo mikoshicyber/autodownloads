@@ -1,19 +1,17 @@
 #!/usr/bin/python3
 
 import argparse
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
 from datetime import datetime
 import ctypes
 from ctypes import wintypes
-import errno
 import hashlib
 import json
 import ntpath
 import os
 import re
-import socket
 import stat
 import subprocess
 import sys
@@ -30,7 +28,7 @@ if os.name != "nt":
     import fcntl
 
 DEBUG = False
-SCRIPT_VERSION = "2026.11.26.4"
+SCRIPT_VERSION = "2026.11.27.3"
 DEFAULT_DOWNLOAD_DIRECTORY = "/mnt/hdd1/shares/autodownloads/"
 workdir = os.path.abspath(os.path.expanduser(os.environ.get("AUTODOWNLOAD_DIR") or DEFAULT_DOWNLOAD_DIRECTORY))
 STAGING_DIRECTORY = os.path.join(workdir, ".autodownload-stage")
@@ -178,63 +176,20 @@ def capture_log(path):
 
 
 @contextmanager
-def exclusive_lock(script_path, scopes):
-    script_path = os.path.realpath(script_path)
-    requested = sorted(set(scopes)) or ["plugin:__empty__"]
-    if os.name == "nt":
-        with windows_named_lock(script_path, requested):
-            yield
-        return
-    addresses = [
-        (scope, b"\0autodownload-" + hashlib.sha256(os.fsencode(script_path + "\0" + scope)).hexdigest().encode("ascii"))
-        for scope in requested
-    ]
-    legacy_address = b"\0autodownload-" + hashlib.sha256(os.fsencode(script_path)).hexdigest().encode("ascii")
-    acquired = []
-    waiting_for = None
+def file_lock(path):
+    lock_path = path + ".lock"
     try:
-        while True:
-            conflict = None
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as old_lock:
-                try:
-                    old_lock.bind(legacy_address)
-                except OSError as error:
-                    if error.errno != errno.EADDRINUSE:
-                        raise RuntimeError(f"Cannot check legacy autodownload lock: {error}") from error
-                    conflict = "legacy instance"
-            if conflict:
-                if waiting_for != conflict:
-                    print(f"INFO: Waiting for another autodownload instance ({conflict})", file=sys.stderr)
-                    waiting_for = conflict
-                sleep(1)
-                continue
-            for scope, address in addresses:
-                try:
-                    lock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                except OSError as error:
-                    raise RuntimeError(f"Cannot create autodownload lock for {scope}: {error}") from error
-                try:
-                    lock.bind(address)
-                except OSError as error:
-                    lock.close()
-                    if error.errno != errno.EADDRINUSE:
-                        raise RuntimeError(f"Cannot acquire autodownload lock for {scope}: {error}") from error
-                    conflict = scope
-                    break
-                acquired.append(lock)
-            if conflict is None:
-                break
-            for lock in reversed(acquired):
-                lock.close()
-            acquired.clear()
-            if waiting_for != conflict:
-                print(f"INFO: Waiting for another autodownload instance ({conflict})", file=sys.stderr)
-                waiting_for = conflict
-            sleep(1)
-        yield
+        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        print(f"INFO: Skipped locked file: {path} ({lock_path})")
+        yield False
+        return
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+            lock_file.write(f"PID={os.getpid()}\n")
+        yield True
     finally:
-        for lock in reversed(acquired):
-            lock.close()
+        os.unlink(lock_path)
 
 
 def eprint(*args, **kwargs):
@@ -1204,6 +1159,11 @@ def plan_downloads(items, staging_directory, failures=None):
             if os.path.lexists(destination) and not os.path.isfile(destination):
                 raise ValueError(f"Output path is not a regular file: {destination}")
             filename = os.path.basename(destination)
+            if filename.lower().endswith(".lock"):
+                raise ValueError(f"Reserved lock filename: {destination}")
+            if os.path.lexists(destination + ".lock"):
+                print(f"INFO: Skipped locked file: {destination} ({destination}.lock)")
+                continue
             checksum = item.get("github_sha256", "")
             completed = completed_download_exists(destination)
             if checksum and completed and valid_download_content(destination):
@@ -1284,11 +1244,13 @@ def prepare_redirect_downloads(items, failures=None):
     return prepared
 
 
-def completed_root_files():
+def completed_root_files(owned_path=None):
     candidates = []
     with os.scandir(workdir) as entries:
         for entry in entries:
-            if entry.name.endswith(".aria2") or not entry.is_file(follow_symlinks=False):
+            if entry.name.lower().endswith((".aria2", ".lock")) or not entry.is_file(follow_symlinks=False):
+                continue
+            if entry.path != owned_path and os.path.lexists(entry.path + ".lock"):
                 continue
             try:
                 if completed_download_exists(entry.path) and valid_download_content(entry.path):
@@ -1345,15 +1307,16 @@ def clear_old_for_download(item, downloaded_path, protected_paths=()):
     patterns = [re.compile(str(rule), re.IGNORECASE) for rule in item.get("cleanup_rules", ()) if rule]
     if not patterns:
         return 0
-    candidates = completed_root_files()
+    candidates = completed_root_files(downloaded_path)
     keep, remove = cleanup_version_sets(candidates, patterns, os.path.basename(downloaded_path))
     deleted = 0
     for path in natsorted(remove - keep - set(protected_paths), key=sort_key):
-        if not completed_download_exists(path):
-            continue
-        os.remove(path)
-        print(f"INFO: Removed older file: {path}")
-        deleted += 1
+        with (nullcontext(True) if path == downloaded_path else file_lock(path)) as acquired:
+            if not acquired or not completed_download_exists(path) or not valid_download_content(path):
+                continue
+            os.remove(path)
+            print(f"INFO: Removed older file: {path}")
+            deleted += 1
     return deleted
 
 
@@ -1381,7 +1344,11 @@ def download_one(item, destination, active_paths, finish_lock, output_lock):
     if not destination:
         return False, "Cannot determine download destination"
     try:
-        with exclusive_lock(os.path.realpath(__file__), ("file:" + os.path.realpath(destination),)):
+        with file_lock(destination) as acquired:
+            if not acquired:
+                return True, ""
+            if os.path.islink(destination) or (os.path.lexists(destination) and not os.path.isfile(destination)):
+                raise ValueError(f"Invalid destination path: {destination}")
             source_path = download_output_path(item)
             if (source_path == destination and completed_download_exists(destination)
                     and valid_download_content(destination)
@@ -1506,14 +1473,21 @@ def download_all(items, failures=None):
 def rename_files():
     for root, _, files in os.walk(workdir):
         for file in files:
-            if "?" in file:
+            if "?" in file and not file.lower().endswith(".lock"):
                 new_name = file.split("?")[0]
+                if new_name.lower().endswith(".lock"):
+                    continue
                 old_file_path = os.path.join(root, file)
                 new_file_path = os.path.join(root, new_name)
+                lock_directory = workdir if root == STAGING_DIRECTORY else root
+                lock_paths = {os.path.join(lock_directory, name.removesuffix(".aria2")) for name in (file, new_name)}
                 try:
-                    os.rename(old_file_path, new_file_path)
-                    if DEBUG:
-                        eprint(f"Renamed: {old_file_path} to {new_file_path}")
+                    with ExitStack() as stack:
+                        if not all(stack.enter_context(file_lock(path)) for path in sorted(lock_paths)):
+                            continue
+                        os.rename(old_file_path, new_file_path)
+                        if DEBUG:
+                            eprint(f"Renamed: {old_file_path} to {new_file_path}")
                 except OSError as e:
                     eprint(f"Failed to rename {old_file_path} to {new_file_path}. Error: {e}")
 
@@ -1572,7 +1546,7 @@ def create_plugin(filename="plugin"):
   }
 }
 '''
-    with open(file_path, "w", encoding="utf-8") as outfile:
+    with open(file_path, "x", encoding="utf-8") as outfile:
         outfile.write(data)
     print("New plugin created", file_path)
     editor = os.environ.get("EDITOR")
@@ -1716,11 +1690,12 @@ def clear_old(plugins_arg):
         eprint("clear_old keep", keep_set)
         eprint("clear_old delete", final_delete)
     for path in natsorted(final_delete, key=sort_key):
-        if not completed_download_exists(path) or not valid_download_content(path):
-            continue
         try:
-            os.remove(path)
-            print(f"INFO: Removed older file: {path}")
+            with file_lock(path) as acquired:
+                if not acquired or not completed_download_exists(path) or not valid_download_content(path):
+                    continue
+                os.remove(path)
+                print(f"INFO: Removed older file: {path}")
         except OSError as error:
             print(f"ERROR: Cannot remove older file {path}: {error}", file=sys.stderr)
 
@@ -1736,7 +1711,9 @@ def list_plugins(folder_path):
         print(f)
 
 
-def run_lock_names(args):
+def run_plugin_names(args):
+    if args.clear is not None:
+        return ["__maintenance__"]
     if args.run is not None and all(args.run):
         return sorted({name.removesuffix(".json") for group in args.run for name in group})
     if args.run is None and (args.create is not None or args.edit is not None or args.list):
@@ -1744,7 +1721,7 @@ def run_lock_names(args):
     if not os.path.isdir(plugins_directory):
         return []
     with os.scandir(plugins_directory) as entries:
-        return sorted(entry.name[:-5] for entry in entries if entry.is_file() and entry.name.endswith(".json"))
+        return [entry.name[:-5] for entry in entries if entry.name.endswith(".json")]
 
 
 def run_log_file(args, plugin_names):
@@ -1763,35 +1740,51 @@ def run_log_file(args, plugin_names):
     return os.path.join(directory, f"autodownload.{safe_label}.log")
 
 
-def run(args):
+def run_plugins(plugin_names):
+    successful = True
+    for name in plugin_names:
+        try:
+            failures = []
+            selected = load_plugin(plugins_directory, name + ".json", failures)
+            if not run_search(selected, failures):
+                successful = False
+        except (requests.RequestException, RuntimeError, ValueError, OSError) as error:
+            print(f"ERROR: Plugin {name} failed: {error}", file=sys.stderr)
+            successful = False
+    return successful
+
+
+def run(args, plugin_names):
     global DEBUG
     if args.debug:
         DEBUG = True
-    plugin_failures = []
-    plugins = load_plugins(plugins_directory, plugin_failures)
     if args.create is not None:
         create_plugin(args.create)
     elif args.edit is not None:
         edit_plugin(args.edit)
-    elif args.clear:
-        clear_old(plugins)
-    elif args.run is not None:
-        failures = []
-        if any(not group for group in args.run):
-            selected = plugins
-            failures = plugin_failures
-        else:
+    elif args.clear is not None:
+        names = list(dict.fromkeys(name.removesuffix(".json") for group in args.clear for name in group))
+        if names:
+            failures = []
             selected = []
-            for name in dict.fromkeys(name for group in args.run for name in group):
-                selected.extend(load_plugin(plugins_directory, name, failures))
-        if not run_search(selected, failures):
+            for name in names:
+                selected.extend(load_plugin(plugins_directory, name + ".json", failures))
+            if failures:
+                sys.exit(1)
+            clear_old(selected)
+        else:
+            clear_old(load_plugins(plugins_directory))
+    elif args.run is not None:
+        if all(args.run):
+            plugin_names = list(dict.fromkeys(name.removesuffix(".json") for group in args.run for name in group))
+        if not run_plugins(plugin_names):
             sys.exit(1)
     elif args.list:
         list_plugins(plugins_directory)
     elif args.rename:
         rename_files()
     else:
-        if not run_search(plugins, plugin_failures):
+        if not run_plugins(plugin_names):
             sys.exit(1)
 
 
@@ -1815,24 +1808,32 @@ Operating modes:
   ./autodownload.py --run NAME               Run only plugins/NAME.json
   ./autodownload.py --run NAME1 NAME2        Run multiple selected plugins
   ./autodownload.py --run NAME1 --run NAME2  Same as above, using repeated --run options
-  Different plugins run concurrently in separate processes.
-  If at least one plugin overlaps, the second invocation waits for the first
-  to finish instead of failing with a lock error.
-  Overlapping files are protected by a separate download lock.
+  Plugins run sequentially within one invocation, with parallel file downloads.
+  Plugins and discovery are not locked. Each active download creates a
+  <destination>.lock file atomically, next to the final destination, including
+  staged downloads. If the lock already exists, the file is skipped without waiting.
+  Locks contain the owner PID and are removed on normal completion or handled errors.
+  After a forced termination, a stale lock may remain; remove it manually only
+  after verifying that no process is still writing the file.
+  Cleanup and rename skip locked files and acquire locks before changing files.
+  The .lock suffix is reserved for lock files.
   File logging is disabled by default. Console output is always available.
   Enable file logging with --log, --log-file PATH, or AUTODOWNLOAD_LOG=1
   (also accepts true, yes, or on, case-insensitive).
   When enabled, --run NAME uses autodownload.NAME.log; a general run uses
   autodownload.log. --log-file specifies an explicit log file path.
   Concurrent writes to the same explicitly specified log file are serialized.
-  Linux: Unix sockets and flock; Windows: system-wide named mutexes.
+  Log serialization: Linux uses flock; Windows uses named mutexes.
   ./autodownload.py --list                   List plugin names
   ./autodownload.py --create [NAME]          Create a JSON template (default: plugin)
   ./autodownload.py --edit [NAME]            Open JSON using $EDITOR (if set); create it if missing
-  ./autodownload.py --clear                  Remove older versions according to rules
+  ./autodownload.py --clear                  Remove older versions using all plugin rules
+  ./autodownload.py --clear NAME [NAME ...]  Remove older versions using only selected plugin rules
+                --clear can be repeated; if any names are supplied, only those plugins are used.
+                Plugin names may include the .json suffix. A failed selected plugin load aborts cleanup.
                 Only completed versioned files in the main directory are removed,
                 separately for each filename family and architecture.
-                Unversioned files, .aria2 files, and .autodownload-stage are not removed.
+                Unversioned files, .aria2 files, .lock files, and .autodownload-stage are not removed.
   ./autodownload.py --rename                 Remove the filename portion after the ? character
   ./autodownload.py --version                Display the script version
   ./autodownload.py --run --debug            Enable debug output without enabling file logging
@@ -1931,7 +1932,7 @@ def main():
     parser.add_argument("--version", action="version", version=f"%(prog)s {SCRIPT_VERSION}")
     parser.add_argument("--create", nargs="?", const="plugin", help="Create a plugin")
     parser.add_argument("--edit", nargs="?", const="plugin", help="Edit a plugin")
-    parser.add_argument("--clear", action="store_true", help="Remove older files")
+    parser.add_argument("--clear", nargs="*", action="append", metavar="NAME", help="Remove older files for all or selected plugins")
     parser.add_argument("--run", nargs="*", action="append", metavar="NAME", help="Run all or selected plugins")
     parser.add_argument("--list", action="store_true", help="List plugins")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
@@ -1949,17 +1950,13 @@ def main():
             raise RuntimeError("Set AUTODOWNLOAD_DIR to a Windows path; the default directory is Linux-specific")
         if os.name != "nt" and (ntpath.splitdrive(configured_dir)[0] or configured_dir.startswith("\\\\")):
             raise RuntimeError("AUTODOWNLOAD_DIR contains a Windows path; use a mounted Linux path instead")
-        names = run_lock_names(args)
-        scopes = ["plugin:" + name for name in names]
-        if args.run is None and (args.create is not None or args.edit is not None or args.list):
-            scopes = ["maintenance"]
-        with exclusive_lock(os.path.realpath(__file__), scopes):
-            with capture_log(run_log_file(args, names)):
-                try:
-                    run(args)
-                except (requests.RequestException, RuntimeError, ValueError, OSError) as error:
-                    print(f"ERROR: {error}", file=sys.stderr)
-                    sys.exit(1)
+        names = run_plugin_names(args)
+        with capture_log(run_log_file(args, names)):
+            try:
+                run(args, names)
+            except (requests.RequestException, RuntimeError, ValueError, OSError) as error:
+                print(f"ERROR: {error}", file=sys.stderr)
+                sys.exit(1)
     except RuntimeError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)
