@@ -2,7 +2,7 @@
 
 `autodownload.py` is a JSON plugin-based file downloader and updater for Linux and Windows. The script discovers current links to installers and other artifacts, downloads files using `aria2c`, resumes interrupted downloads, and removes older completed versions according to plugin rules.
 
-This documentation applies to script version **`2026.11.27.3`**.
+This documentation applies to script version **`2026.11.28.1`**.
 
 ## Features
 
@@ -208,7 +208,7 @@ If `type` is not specified, it defaults to `1`.
 | `url` | Source URL of a file, page, directory, or JSON API |
 | `type` | Source type: `0`, `1`, `2`, or `3` |
 | `rules` | Array of filename regular expressions; used for discovery with `type: 1` and `type: 3`, and for outdated version cleanup with all types |
-| `tail` | Number of last links after natural sorting (`0` means all); used for discovery with `type: 1` and `type: 3` |
+| `tail` | Number of last links after natural sorting of normalized filenames (`0` means all); used for discovery with `type: 1` and `type: 3` |
 | `path` | Array of JSON keys and array indices; used only with `type: 2` |
 | `out` | Override the local filename; an empty string uses the filename from the URL or final redirect |
 | `proxy` | Plugin-specific proxy: a URL string or an object with `all`, `http`, `https`, `ftp`, and `no_proxy` keys |
@@ -223,6 +223,42 @@ If `type` is not specified, it defaults to `1`.
 Regular expressions in `rules` are matched against filenames case-insensitively. Discovery uses `re.match()`, which matches from the beginning of the filename; cleanup uses `re.search()`. In JSON, backslashes must be escaped: `\\.` instead of `\.`.
 
 With `type: 0` and `type: 2`, `rules` **does not filter downloaded URLs**; it determines which filenames are considered during subsequent cleanup. In the current implementation, `tail` also does not limit the list of URLs obtained from JSON (`type: 2`).
+
+#### Automatic release filename parsing
+
+Before comparing versions, the script automatically strips a trailing build date (`YYYYMMDD`) and hexadecimal hash (7–40 characters, with at least one letter `a–f`) when preceded by a dotted version and the date is valid. Separators `_`, `-`, `.` and compound extensions are supported. Architecture, other filename components and extensions are preserved. Ambiguous suffixes, including standalone dates or hashes, are retained. Actual filenames and matching against `rules` are unchanged. The same parser is used for release sorting, download planning, and cleanup. Dotted versions and unambiguous compact numeric versions (at least four digits) are recognized; embedded compact versions require a matching rule that allows the digits to vary. Architecture tokens are not treated as versions. Names with several competing version candidates or only a short integer are treated as unversioned: they are staged and excluded from version cleanup. `tail` sorts normalized filenames naturally, using naturally sorted original URLs for ties. Directory traversal (`search_tail`) is unchanged.
+
+Example `plugins/farmanager.json`:
+
+```json
+{
+  "url": "https://github.com/FarGroup/FarManager/releases/latest",
+  "type": 1,
+  "rules": [
+    "^Far_[0-9]+(?:\\.[0-9]+){3}_x64_[0-9]{8}_[0-9a-f]{7,40}\\.msi$"
+  ],
+  "tail": 1
+}
+```
+
+Manual and automatic cleanup use the same normalization. Equal versions are retained. Remove obsolete `cleanup_ignore`, `version_regex`, `version_family` and `fallback_url` fields from older plugins; for an anti-bot-protected source, set an accessible URL directly in `url`. The example uses GitHub Releases.
+
+#### Source-specific settings
+
+- `resolve_redirect`: optional boolean (default `false`). Forces redirect resolution before downloading; if the original URL has a valid filename, the resolved filename must match it. The configured `aria2.user_agent` is used for the redirect request, otherwise the default browser user agent is used. Direct, HTML, JSON, recursive, GitHub and SourceForge sources use the same download preparation pipeline. URLs without an identifiable output name and SourceForge download URLs are resolved automatically. A SourceForge latest URL is resolved only once. GitHub release digests are collected before redirect resolution. Redirects to Metalink documents are rejected; no extra redirect probe is made for ordinary file URLs unless requested. The configured `aria2.user_agent` (or `user-agent`) is also used for metadata requests and aria2 downloads; defaults remain source-dependent.
+- Migration: the former Inkscape-specific signed EXE handling is no longer implicit; use filename rules that accept the actual signed and unsigned names (for example, replace `-x64\\.exe$` with `-x64(?:\\.signed)?\\.exe$` in the JSON rule). For LibreOffice, add `"resolve_redirect": true` and configure `aria2.user_agent` and `aria2.no_want_digest_header` explicitly. GitHub and SourceForge protocol support remains built in.
+
+For LibreOffice, merge these fields into the existing plugin (retain its existing `aria2` options):
+
+```json
+{
+  "resolve_redirect": true,
+  "aria2": {
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0",
+    "no_want_digest_header": true
+  }
+}
+```
 
 #### Additional fields for `type: 3`
 
@@ -374,7 +410,7 @@ Examples: `OllamaSetup.exe`, `Keet.msix`, `Element Setup.exe`.
 
 ## Cleanup of older versions
 
-After a successful download, the script removes older **completed** versions matching the applicable `rules`. Filename families are considered during comparison to keep different variants and architectures separate.
+After a successful download, the script removes older **completed** versions matching the applicable `rules`. Filename families are considered during comparison to keep different variants and architectures separate. Recognized trailing build date/hash pairs are automatically ignored during version comparison. Files with equal versions are retained. The plugin `rules` must still match these filenames.
 
 Manual cleanup:
 

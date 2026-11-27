@@ -11,6 +11,7 @@
     "^LibreOffice_[0-9]+(?:\\.[0-9]+)+_Win_x86-64_helppack_ru\\.msi$"
   ],
   "tail": 0,
+  "resolve_redirect": true,
   "proxy": {
     "all": "http://127.0.0.1:1080",
     "no_proxy": "localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16"
@@ -21,6 +22,8 @@
     "max_tries": 5,
     "retry_wait": 5,
     "connect_timeout": 20,
-    "timeout": 120
+    "timeout": 120,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0",
+    "no_want_digest_header": true
   }
 }

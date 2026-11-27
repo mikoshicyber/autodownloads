@@ -1,5 +1,8 @@
 {
-  "url": "https://www.farmanager.com/download.php?l=ru",
+  "url": "https://github.com/FarGroup/FarManager/releases/latest",
   "type": 1,
-  "rules": ["Far[\\db]+.x64.[\\d]+.msi"]
+  "rules": [
+    "^Far_[0-9]+(?:\\.[0-9]+){3}_x64_[0-9]{8}_[0-9a-f]{7,40}\\.msi$"
+  ],
+  "tail": 1
 }

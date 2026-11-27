@@ -28,7 +28,7 @@ if os.name != "nt":
     import fcntl
 
 DEBUG = False
-SCRIPT_VERSION = "2026.11.27.3"
+SCRIPT_VERSION = "2026.11.28.1"
 DEFAULT_DOWNLOAD_DIRECTORY = "/mnt/hdd1/shares/autodownloads/"
 workdir = os.path.abspath(os.path.expanduser(os.environ.get("AUTODOWNLOAD_DIR") or DEFAULT_DOWNLOAD_DIRECTORY))
 STAGING_DIRECTORY = os.path.join(workdir, ".autodownload-stage")
@@ -250,7 +250,7 @@ def load_plugin(directory, filename, failures=None):
         data["_plugin_name"] = os.path.splitext(file_name)[0]
         data["_plugin_file"] = file_path
         return [data]
-    except (OSError, UnicodeError, ValueError) as error:
+    except (OSError, UnicodeError, ValueError, re.error) as error:
         if failures is not None:
             failures.append(file_name)
         print(f"ERROR: Cannot load plugin {file_name}: {error}", file=sys.stderr)
@@ -367,7 +367,7 @@ def request_text(url, target=None):
     target = target or {}
     proxy_config = target_proxy_config(target)
     proxies = requests_proxies(proxy_config)
-    headers = {"User-Agent": BROWSER_USER_AGENT}
+    headers = {"User-Agent": http_user_agent(target, BROWSER_USER_AGENT)}
     connect_timeout = float(target.get("request_connect_timeout", 10))
     read_timeout = float(target.get("request_read_timeout", 45))
     retries = int(target.get("request_retries", 2))
@@ -410,6 +410,10 @@ def find_all_links(url, target=None, tag="a", attr="href"):
                 furl = urljoin(url, a[attr])
             urls.append(furl)
     return urls
+
+
+def is_github_url(url):
+    return (urlsplit(str(url)).hostname or "").lower() in ("github.com", "api.github.com")
 
 
 def is_sourceforge_url(url):
@@ -492,11 +496,6 @@ def resolve_sourceforge_download(url, target):
     return sourceforge_apply_mirror(final_url, target), filename
 
 
-def is_documentfoundation_url(url):
-    parsed = urlparse(str(url))
-    return parsed.hostname == "download.documentfoundation.org" and parsed.path.startswith("/libreoffice/")
-
-
 def is_github_release_page(url):
     parsed = urlsplit(url)
     return (parsed.hostname or "").lower() == "github.com" and re.fullmatch(
@@ -504,7 +503,7 @@ def is_github_release_page(url):
     ) is not None
 
 
-def resolve_file_redirect(url, proxy_config, provider):
+def resolve_file_redirect(url, proxy_config, provider, user_agent=""):
     command = [
         "curl",
         "--location",
@@ -518,10 +517,10 @@ def resolve_file_redirect(url, proxy_config, provider):
         "--output", os.devnull,
         "--write-out", "%{url_effective}",
     ]
-    if provider == "LibreOffice":
-        command.extend(("--user-agent", BROWSER_USER_AGENT))
+    if user_agent:
+        command.extend(("--user-agent", user_agent))
     proxy = proxy_config or {}
-    proxy_url = proxy.get("https") or proxy.get("all")
+    proxy_url = proxy.get(urlsplit(url).scheme) or proxy.get("all")
     if proxy_url:
         command.extend(("--proxy", proxy_url))
     if proxy.get("no_proxy"):
@@ -535,7 +534,7 @@ def resolve_file_redirect(url, proxy_config, provider):
         details = result.stderr.strip() or "no details"
         raise RuntimeError(f"{provider} redirect failed for {url}: curl exit {result.returncode}: {details}")
     final_url = result.stdout.strip()
-    filename = filename_from_url(final_url)
+    filename = download_filename_from_url(final_url)
     parsed_final = urlsplit(final_url)
     if is_github_release_page(final_url):
         raise RuntimeError(f"{provider} redirect returned a GitHub release page, not a file: {final_url}")
@@ -544,15 +543,6 @@ def resolve_file_redirect(url, proxy_config, provider):
     if filename.lower().endswith((".meta4", ".metalink")):
         raise RuntimeError(f"{provider} redirect returned a Metalink document instead of a file: {final_url}")
     return final_url, filename
-
-
-def sourceforge_resolve_redirect(url, proxy_config):
-    return resolve_file_redirect(url, proxy_config, "SourceForge")
-
-
-def sourceforge_latest_filename(url, target):
-    _, filename = sourceforge_resolve_redirect(url, target_proxy_config(target))
-    return filename
 
 
 def sourceforge_file_links(url, target):
@@ -695,11 +685,13 @@ def download_item(url, target):
         "aria2": target.get("aria2", {}) if isinstance(target, dict) else {},
         "source": target.get("url", "") if isinstance(target, dict) else "",
         "cleanup_rules": tuple(target.get("rules") or ()) if isinstance(target, dict) else (),
+        "resolve_redirect": target.get("resolve_redirect", False),
     }
 
 
-def select_tail(urls, tail):
-    unique = natsorted(set(urls), key=sort_key)
+def select_tail(urls, tail, rules=()):
+    unique = natsorted(sorted(set(urls)), key=sort_key)
+    unique = natsorted(unique, key=lambda url: sort_key(parse_release_filename(download_filename_from_url(url), rules)[0] or url))
     try:
         tail_value = int(tail)
     except Exception:
@@ -711,10 +703,10 @@ def select_tail(urls, tail):
 
 def github_api_url(link):
     parsed = urlparse(link)
-    host = parsed.netloc.lower()
+    host = (parsed.hostname or "").lower()
     if host == "api.github.com":
         return link
-    if host == "github.com" or host.endswith(".github.com"):
+    if host == "github.com":
         parts = [p for p in parsed.path.strip("/").split("/") if p]
         if len(parts) >= 2:
             owner = parts[0]
@@ -722,6 +714,8 @@ def github_api_url(link):
             rest = parts[2:]
             if rest[:2] == ["releases", "latest"]:
                 return f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+            if len(rest) == 3 and rest[:2] == ["releases", "tag"]:
+                return f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{quote(unquote(rest[2]), safe='')}"
             if rest[:1] == ["releases"]:
                 return f"https://api.github.com/repos/{owner}/{repo}/releases"
             return f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
@@ -793,7 +787,7 @@ def prepare_github_checksums(items):
         endpoint, filename = lookup
         if endpoint not in cache:
             try:
-                data = json.loads(request_text(endpoint, {"proxy": item.get("proxy")}))
+                data = json.loads(request_text(endpoint, {"proxy": item.get("proxy"), "aria2": item.get("aria2")}))
                 if not isinstance(data, dict):
                     raise ValueError("GitHub release API returned an unexpected response")
                 cache[endpoint] = {
@@ -824,70 +818,44 @@ def get_target_downloads(target, failures=None):
         return []
     if DEBUG:
         eprint("Target link", link)
-    urls = []
+    target_type = target.get("type", 1)
     rules = target.get("rules", [])
-    tail = target.get("tail", 0)
-    release_name = ""
     github_digests = {}
-    if target.get("type", 1) == 3:
-        urls.extend(recursive_file_links(link, target, failures))
-    elif "github.com" in link:
-        for furl in github_release_assets(link, target, github_digests):
-            if checkurl(furl, rules):
-                urls.append(furl)
+    if target_type == 0:
+        urls = [link]
+    elif target_type == 2:
+        urls = get_from_json(target)
+    elif target_type == 3:
+        urls = recursive_file_links(link, target, failures)
+    elif is_github_url(link):
+        urls = [url for url in github_release_assets(link, target, github_digests) if checkurl(url, rules)]
     elif is_sourceforge_url(link):
         if urlparse(link).path.rstrip("/").endswith("/files/latest/download"):
-            resolved_link, release_name = resolve_sourceforge_download(link, target)
-            if not release_name:
-                release_name = sourceforge_latest_filename(link, target)
-            if checkurl(resolved_link, rules, filename=release_name):
-                urls.append(resolved_link)
-        elif valid_download_filename(filename_from_url(link)):
-            if checkurl(link, rules):
-                urls.append(link)
+            item = download_item(link, target)
+            resolved = resolve_download(item)
+            if not checkurl(item["url"], rules, filename=resolved["_redirect_filename"]):
+                raise RuntimeError(f"No downloadable files match the rules for {link}")
+            return [resolved]
+        if valid_download_filename(filename_from_url(link)):
+            urls = [link] if checkurl(link, rules) else []
         else:
-            for u in sourceforge_file_links(link, target):
-                if checkurl(u, rules):
-                    urls.append(u)
+            urls = [url for url in sourceforge_file_links(link, target) if checkurl(url, rules)]
     else:
-        try:
-            links = find_all_links(link, target)
-        except RuntimeError as error:
-            if (urlparse(link).hostname or "").lower() not in ("farmanager.com", "www.farmanager.com") or "Anubis" not in str(error):
-                raise
-            print("WARN: Far Manager website is protected by Anubis; trying official GitHub Releases", file=sys.stderr)
-            links = github_release_assets("https://github.com/FarGroup/FarManager/releases/latest", target, github_digests)
-            matched = [u for u in links if checkurl(u, rules)]
-            if not matched:
-                rule_text = " ".join(str(rule).lower() for rule in rules)
-                architecture = "x64" if "x64" in rule_text else "x86" if "x86" in rule_text else ""
-                if architecture and "msi" in rule_text:
-                    fallback_rule = rf"^Far_.*_{architecture}_.*\.msi$"
-                    matched = [u for u in links if re.match(fallback_rule, filename_from_url(u), re.IGNORECASE)]
-                    if matched:
-                        print(f"WARN: Far Manager plugin rules do not match current release filenames; using {architecture} MSI", file=sys.stderr)
-            urls.extend(matched)
-            links = []
-        for u in links:
-            furl = u if str(u).lower().startswith("http") else urljoin(link, u)
-            if checkurl(furl, rules):
-                urls.append(furl)
-            elif (urlparse(link).hostname or "").lower() in ("inkscape.org", "www.inkscape.org"):
-                name = filename_from_url(furl)
-                if name.lower().endswith("-x64.signed.exe") and checkurl(furl, rules, filename=name[:-len(".signed.exe")] + ".exe"):
-                    urls.append(furl)
-    if not urls:
-        raise RuntimeError(f"No downloadable files match the rules for {link}")
+        urls = [url for url in find_all_links(link, target) if checkurl(url, rules)]
+    if target_type not in (0, 2):
+        if not urls:
+            raise RuntimeError(f"No downloadable files match the rules for {link}")
+        urls = select_tail(urls, target.get("tail", 0), rules)
     if DEBUG:
-        eprint("get_urls", set(urls))
+        eprint("get_urls", urls)
     result = []
-    for url in select_tail(urls, tail):
+    for url in urls:
+        if not url:
+            continue
         try:
             item = download_item(url, target)
             if url in github_digests:
                 item["github_sha256"] = github_digests[url]
-            if is_sourceforge_url(link) and urlparse(link).path.rstrip("/").endswith("/files/latest/download") and not item["out"]:
-                item["out"] = release_name
             result.append(item)
         except Exception as error:
             if failures is None:
@@ -902,21 +870,23 @@ def get_urls(targets, failures=None):
     final = []
     for target in targets:
         try:
-            final.extend(get_target_downloads(target, failures))
+            discovered = get_target_downloads(target, failures)
+            if target.get("type", 1) in (0, 2):
+                final.extend(discovered)
+            else:
+                seen = set()
+                for item in discovered:
+                    key = (item["url"], item.get("out", ""), json.dumps(item["proxy"], sort_keys=True))
+                    if key not in seen:
+                        seen.add(key)
+                        final.append(item)
         except Exception as error:
             if failures is None:
                 raise
             name = target.get("_plugin_name") or target.get("url", "")
             failures.append(name)
             print(f"ERROR: Cannot discover downloads for {name}: {error}", file=sys.stderr)
-    seen = set()
-    result = []
-    for item in natsorted(final, key=lambda x: sort_key(x["url"])):
-        key = (item["url"], item.get("out", ""), json.dumps(item["proxy"], sort_keys=True))
-        if key not in seen:
-            seen.add(key)
-            result.append(item)
-    return result
+    return final
 
 
 def aria2_value(value):
@@ -930,6 +900,10 @@ def aria2_option(options, aliases, default=None):
         if alias in options and options[alias] is not None:
             return options[alias]
     return default
+
+
+def http_user_agent(item, default=""):
+    return aria2_option(item.get("aria2") or {}, ("user-agent", "user_agent"), default)
 
 
 def item_aria2_options(item):
@@ -969,12 +943,12 @@ def item_aria2_options(item):
         options["auto-save-interval"] = aria2_option(custom, ("auto_save_interval", "auto-save-interval"), 10)
 
     if is_sourceforge:
-        options["user-agent"] = aria2_option(custom, ("user_agent", "user-agent"), SOURCEFORGE_USER_AGENT)
         options["referer"] = aria2_option(custom, ("referer",), "*")
         options["min-split-size"] = aria2_option(custom, ("min_split_size", "min-split-size"), "5M")
-    elif is_documentfoundation_url(source):
-        options["user-agent"] = aria2_option(custom, ("user_agent", "user-agent"), BROWSER_USER_AGENT)
-        options["no-want-digest-header"] = aria2_option(custom, ("no_want_digest_header", "no-want-digest-header"), "true")
+
+    user_agent = http_user_agent(item, SOURCEFORGE_USER_AGENT if is_sourceforge else "")
+    if user_agent:
+        options["user-agent"] = user_agent
 
     for src, dst in (
         ("min_split_size", "min-split-size"),
@@ -983,8 +957,6 @@ def item_aria2_options(item):
         ("file-allocation", "file-allocation"),
         ("lowest_speed_limit", "lowest-speed-limit"),
         ("lowest-speed-limit", "lowest-speed-limit"),
-        ("user_agent", "user-agent"),
-        ("user-agent", "user-agent"),
         ("referer", "referer"),
         ("conditional_get", "conditional-get"),
         ("conditional-get", "conditional-get"),
@@ -1027,35 +999,17 @@ def max_concurrent_downloads(items):
     return max(values)
 
 
-def write_aria2_input(items, path, failures=None):
-    valid_items = []
-    with open(path, "w", encoding="utf-8") as f:
-        for item in items:
-            try:
-                url = str(item["url"]).replace("\n", "").replace("\r", "")
-                if not url:
-                    raise ValueError("Empty download URL")
-                options = item_aria2_options(item)
-            except Exception as error:
-                if failures is None:
-                    raise
-                name = item.get("source") or item.get("url", "")
-                failures.append(name)
-                print(f"ERROR: Cannot configure aria2 download for {name}: {error}", file=sys.stderr)
-                continue
-            f.write(url + "\n")
-            for key, value in options.items():
-                f.write(f"  {key}={value}\n")
-            valid_items.append(item)
-    return valid_items
+def download_filename_from_url(url):
+    filename = filename_from_url(url)
+    if filename.lower().endswith((".php", ".asp", ".aspx", ".cgi", ".jsp")):
+        values = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True))
+        filename = sanitize_filename(values.get("file") or values.get("filename") or "")
+    return filename
 
 
 def download_output_path(item):
     options = item_aria2_options(item)
-    filename = options.get("out") or filename_from_url(item["url"])
-    if not options.get("out") and filename.lower().endswith((".php", ".asp", ".aspx", ".cgi", ".jsp")):
-        values = dict(parse_qsl(urlsplit(item["url"]).query, keep_blank_values=True))
-        filename = sanitize_filename(values.get("file") or values.get("filename") or "")
+    filename = options.get("out") or download_filename_from_url(item["url"])
     if not valid_download_filename(filename) or os.path.basename(filename) != filename:
         return ""
     return os.path.join(options["dir"], filename)
@@ -1094,28 +1048,6 @@ def quarantine_invalid_download(path):
         os.unlink(quarantine_path)
         raise
     return quarantine_path
-
-
-def filename_has_version(filename, rules=()):
-    if re.search(r"(?<!\d)\d+(?:\.\d+)+(?!\d)", filename):
-        return True
-    architecture = re.compile(r"(?:x86[-_]?64|amd64|aarch64|arm64|x64|x86|win(?:7|8|10|11|32|64)|windows(?:10|11)|w(?:32|64)|[36]2bit|64bit|ia32|i386|i686)", re.IGNORECASE)
-    protected = [match.span() for match in architecture.finditer(filename)]
-    patterns = [re.compile(str(rule), re.IGNORECASE) for rule in rules if rule]
-    matched = [pattern for pattern in patterns if pattern.match(filename)]
-    for token in re.finditer(r"\d+", filename):
-        start, end = token.span()
-        if any(start < right and end > left for left, right in protected):
-            continue
-        if len(token.group()) >= 4 and (start == 0 or not filename[start - 1].isalnum()) and (end == len(filename) or not filename[end].isalnum()):
-            return True
-        for pattern in matched:
-            for index in range(start, end):
-                digit = filename[index]
-                changed = filename[:index] + str((int(digit) + 1) % 10) + filename[index + 1:]
-                if pattern.match(changed):
-                    return True
-    return False
 
 
 def replace_completed_download(source, destination):
@@ -1170,7 +1102,8 @@ def plan_downloads(items, staging_directory, failures=None):
                 if file_sha256(destination) == checksum:
                     print(f"INFO: Skipped GitHub file (SHA-256 matched): {destination}")
                     continue
-            versioned = filename_has_version(filename, item.get("cleanup_rules", ()))
+            _, _, version = parse_release_filename(filename, item.get("cleanup_rules", ()))
+            versioned = version is not None
             if versioned and not (checksum and completed):
                 if completed and valid_download_content(destination):
                     print(f"INFO: Skipped existing versioned file: {destination}")
@@ -1198,43 +1131,35 @@ def plan_downloads(items, staging_directory, failures=None):
     return planned, staged
 
 
+def resolve_download(item):
+    url = item["url"]
+    if is_github_release_page(url):
+        raise ValueError(f"GitHub release page is not a downloadable file: {url}")
+    if item.get("_redirect_filename"):
+        return item
+    sourceforge = is_sourceforge_url(url)
+    explicit = item.get("resolve_redirect")
+    if not sourceforge and not explicit and download_output_path(item):
+        return item
+    provider = "SourceForge" if sourceforge else "Download"
+    user_agent = http_user_agent(item, SOURCEFORGE_USER_AGENT if sourceforge else BROWSER_USER_AGENT)
+    final_url, filename = resolve_file_redirect(url, item.get("proxy"), provider, user_agent)
+    expected_name = download_filename_from_url(url)
+    if explicit and valid_download_filename(expected_name) and filename != expected_name:
+        raise RuntimeError(f"Redirect filename mismatch: expected {expected_name}, got {filename}")
+    resolved = dict(item, url=final_url, _redirect_filename=filename)
+    if not resolved.get("out"):
+        resolved["out"] = filename
+    if DEBUG:
+        eprint("Resolved download URL", final_url, "file", resolved["out"])
+    return resolved
+
+
 def prepare_redirect_downloads(items, failures=None):
     prepared = []
     for item in items:
         try:
-            if is_github_release_page(item["url"]):
-                raise ValueError(f"GitHub release page is not a downloadable file: {item['url']}")
-            if is_sourceforge_url(item["url"]):
-                final_url, filename = sourceforge_resolve_redirect(item["url"], item.get("proxy"))
-                resolved = dict(item)
-                resolved["url"] = final_url
-                if not resolved.get("out"):
-                    resolved["out"] = filename
-                if DEBUG:
-                    eprint("SourceForge mirror", urlparse(final_url).hostname, "file", resolved["out"])
-                prepared.append(resolved)
-            elif is_documentfoundation_url(item["url"]) and valid_download_filename(filename_from_url(item["url"])):
-                expected_name = filename_from_url(item["url"])
-                final_url, filename = resolve_file_redirect(item["url"], item.get("proxy"), "LibreOffice")
-                if filename != expected_name:
-                    raise RuntimeError(f"LibreOffice mirror filename mismatch: expected {expected_name}, got {filename}")
-                resolved = dict(item)
-                resolved["url"] = final_url
-                if not resolved.get("out"):
-                    resolved["out"] = expected_name
-                if DEBUG:
-                    eprint("LibreOffice mirror", urlparse(final_url).hostname, "file", resolved["out"])
-                prepared.append(resolved)
-            elif not download_output_path(item):
-                final_url, filename = resolve_file_redirect(item["url"], item.get("proxy"), "Download")
-                resolved = dict(item)
-                resolved["url"] = final_url
-                resolved["out"] = filename
-                if DEBUG:
-                    eprint("Resolved download URL", final_url, "file", filename)
-                prepared.append(resolved)
-            else:
-                prepared.append(item)
+            prepared.append(resolve_download(item))
         except (RuntimeError, ValueError, OSError) as error:
             if failures is None:
                 raise
@@ -1260,26 +1185,60 @@ def completed_root_files(owned_path=None):
     return candidates
 
 
-def release_version_family(filename):
+def normalize_release_filename(filename):
     name = os.path.basename(filename).lower()
-    dotted = re.search(r"(?<![a-z0-9])v?(\d+(?:\.\d+)+)(?![a-z0-9])", name)
+    metadata = re.search(r"[-_.](\d{8})[-_.]([0-9a-f]{7,40})(?=\.[a-z0-9]*[a-z][a-z0-9]*(?:\.[a-z0-9]*[a-z][a-z0-9]*)*$)", name)
+    if not metadata or not re.search(r"[a-f]", metadata.group(2)):
+        return name
+    if not re.search(r"(?<![a-z0-9])v?\d+(?:\.\d+)+(?![a-z0-9])", name[:metadata.start()]):
+        return name
+    try:
+        datetime.strptime(metadata.group(1), "%Y%m%d")
+    except ValueError:
+        return name
+    return name[:metadata.start()] + name[metadata.end():]
+
+
+def parse_release_filename(filename, rules=()):
+    name = normalize_release_filename(filename)
+    stem = os.path.splitext(name)[0]
+    architecture = re.compile(r"(?:x86[-_]?64|amd64|aarch64|arm64|x64|x86|win(?:7|8|10|11|32|64)|windows(?:10|11)|w(?:32|64)|[36]2bit|64bit|ia32|i386|i686)", re.IGNORECASE)
+    protected = [match.span() for match in architecture.finditer(stem)]
+    dotted = [match for match in re.finditer(r"(?<!\d)\d+(?:\.\d+)+(?!\d)", stem)
+              if not any(match.start() < right and match.end() > left for left, right in protected)]
+    if len(dotted) > 1:
+        return name, None, None
     if dotted:
-        matched = dotted.group(1)
-        start, end = dotted.span(1)
+        token = dotted[0]
     else:
-        compact = re.search(r"(?<!\d)(\d{4,})(?!\d)", name)
-        if not compact:
-            return None
-        matched = compact.group(1)
-        start, end = compact.span(1)
-    return name[:start] + "{version}" + name[end:], tuple(int(part) for part in matched.split("."))
+        patterns = [rule if isinstance(rule, re.Pattern) else re.compile(str(rule), re.IGNORECASE) for rule in rules if rule]
+        original = os.path.basename(filename).lower()
+        matched = [pattern for pattern in patterns if pattern.match(original)]
+        candidates = []
+        for match in re.finditer(r"\d+", stem):
+            start, end = match.span()
+            if len(match.group()) < 4 or any(start < right and end > left for left, right in protected):
+                continue
+            separated = (start == 0 or not stem[start - 1].isalnum()) and (end == len(stem) or not stem[end].isalnum())
+            if separated:
+                candidates.append(match)
+                continue
+            if any(pattern.match(original[:index] + str((int(original[index]) + 1) % 10) + original[index + 1:])
+                   for pattern in matched for index in range(start, end)):
+                candidates.append(match)
+        if len(candidates) != 1:
+            return name, None, None
+        token = candidates[0]
+    family = name[:token.start()] + "{version}" + name[token.end():]
+    version = tuple(int(part) for part in token.group().split("."))
+    return name, family, version
 
 
 def cleanup_version_sets(candidates, patterns, triggered_name=None):
     keep = set()
     delete = set()
-    trigger_identity = release_version_family(triggered_name) if triggered_name else None
-    if triggered_name and trigger_identity is None:
+    trigger_family = parse_release_filename(triggered_name, patterns)[1] if triggered_name else None
+    if triggered_name and trigger_family is None:
         return keep, delete
     for pattern in patterns:
         if triggered_name and not pattern.search(triggered_name):
@@ -1288,12 +1247,11 @@ def cleanup_version_sets(candidates, patterns, triggered_name=None):
         for name, path in candidates:
             if not pattern.search(name):
                 continue
-            identity = release_version_family(name)
-            if identity is None:
+            _, family, version = parse_release_filename(name, patterns)
+            if version is None:
                 keep.add(path)
                 continue
-            family, version = identity
-            if trigger_identity and family != trigger_identity[0]:
+            if trigger_family and family != trigger_family:
                 continue
             families.setdefault(family, []).append((normalize_version_key(version), path))
         for members in families.values():
@@ -1430,8 +1388,8 @@ def download_all(items, failures=None):
     if not items:
         print("WARN: No download URLs found; old files will not be removed", file=sys.stderr)
         return False
-    items = prepare_redirect_downloads(items, failures)
     items = prepare_github_checksums(items)
+    items = prepare_redirect_downloads(items, failures)
     if not items:
         print("ERROR: No usable download URLs remain", file=sys.stderr)
         return False
@@ -1511,7 +1469,10 @@ def create_plugin(filename="plugin"):
     ".*linux.*amd64.*\\.tar\\.gz$"
   ],
 
-  "search_regex": "^Blender[0-9]+\\.[0-9]+/$",
+  // Optional explicit redirect resolution.
+  // "resolve_redirect": true,
+
+  "search_regex": "^[0-9]+\\.[0-9]+/$",
 
   "search_tail": 1,
 
@@ -1521,7 +1482,7 @@ def create_plugin(filename="plugin"):
   // path: used only for type=2. List elements are dictionary keys or list indices.
   "path": ["assets", 0, "browser_download_url"],
 
-  // tail: number of last URLs to select after natural sorting. 1 - latest only, 0 - all discovered URLs.
+  // tail: number of last URLs after natural sorting of normalized filenames. 0 - all discovered URLs.
   "tail": 1,
 
   // out: override the local filename. If empty, the filename is taken from the URL or the final HTTP redirect URL.
@@ -1609,42 +1570,9 @@ def run_search(plugins_arg, initial_failures=None):
         selected_plugins = load_plugin(plugins_directory, plugins_arg, failures)
     else:
         selected_plugins = plugins_arg
-    targets = []
-    github_targets = []
-    download_list = []
-    has_targets = False
-    for target in selected_plugins:
-        if not isinstance(target, dict):
-            continue
-        has_targets = True
-        name = target.get("_plugin_name") or target.get("url", "")
-        try:
-            target_type = target.get("type", 1)
-            if target_type == 0:
-                url = target.get("url", "")
-                if url:
-                    download_list.append(download_item(url, target))
-            elif target_type == 2:
-                for url in get_from_json(target):
-                    if not url:
-                        continue
-                    try:
-                        download_list.append(download_item(url, target))
-                    except Exception as error:
-                        failures.append(f"{name}: {url}")
-                        print(f"ERROR: Cannot prepare URL {url} from {name}: {error}", file=sys.stderr)
-            elif target_type == 3:
-                targets.append(target)
-            else:
-                if "github.com" not in target.get("url", ""):
-                    targets.append(target)
-                else:
-                    github_targets.append(target)
-        except Exception as error:
-            failures.append(name)
-            print(f"ERROR: Cannot prepare plugin {name}: {error}", file=sys.stderr)
-    download_list += get_urls(targets, failures)
-    download_list += get_urls(github_targets, failures)
+    targets = [target for target in selected_plugins if isinstance(target, dict)]
+    has_targets = bool(targets)
+    download_list = get_urls(targets, failures)
     print([urlsplit(item["url"])._replace(query="").geturl() if is_sourceforge_url(item["url"]) else item["url"] for item in download_list])
     if not has_targets:
         if failures:
@@ -1656,17 +1584,11 @@ def run_search(plugins_arg, initial_failures=None):
     return success and not failures
 
 
-def extract_version_key(s):
-    identity = release_version_family(s)
-    return identity[1] if identity else None
-
-
-def normalize_version_key(parts, width=8):
-    if parts is None:
-        return None
-    if len(parts) >= width:
-        return parts[:width]
-    return parts + tuple(0 for _ in range(width - len(parts)))
+def normalize_version_key(parts):
+    end = len(parts)
+    while end > 1 and parts[end - 1] == 0:
+        end -= 1
+    return parts[:end]
 
 
 def clear_old(plugins_arg):
@@ -1833,6 +1755,7 @@ Operating modes:
                 Plugin names may include the .json suffix. A failed selected plugin load aborts cleanup.
                 Only completed versioned files in the main directory are removed,
                 separately for each filename family and architecture.
+                A trailing build date and hexadecimal commit hash are ignored when comparing dotted versions.
                 Unversioned files, .aria2 files, .lock files, and .autodownload-stage are not removed.
   ./autodownload.py --rename                 Remove the filename portion after the ? character
   ./autodownload.py --version                Display the script version
@@ -1851,7 +1774,8 @@ Format of plugins/NAME.json (// and /* ... */ comments are supported):
   url           File, HTML page, or JSON API URL.
   rules         Array of regular expressions for filenames (case-insensitive re.match).
                 Used for types 1 and 3 and for removing older versions.
-  tail          Select the last N discovered URLs after natural sorting; 0 - all.
+  resolve_redirect  Resolve the file URL explicitly, checking its filename (default: false).
+  tail          Select the last N URLs after natural sorting of normalized filenames; 0 - all.
   path          For type=2: sequence of JSON keys and/or array indices.
   out           Override the local filename; if empty, use the filename from the URL
                 or the final HTTP redirect URL (using curl).
@@ -1889,7 +1813,7 @@ Fields of the aria2 object (hyphenated names are also supported):
   min_split_size                Minimum part size.
   file_allocation               Disk space allocation method.
   lowest_speed_limit            Minimum download speed limit.
-  user_agent / referer          HTTP User-Agent and Referer.
+  user_agent / referer          HTTP User-Agent and Referer. User-Agent also applies to discovery and redirects.
   conditional_get               Conditional HTTP request.
   content_disposition_default_utf8  UTF-8 for Content-Disposition.
   no_want_digest_header         Do not request the Digest header.
@@ -1910,11 +1834,13 @@ Download logic:
   is requested through the API; matching local files are skipped without downloading.
   If a digest is available, downloaded file integrity is verified using SHA-256.
   If the digest is missing or the API is unavailable, the previous logic applies.
-  If the original direct URL does not contain a filename
-  (for example, AIMP ?do=download.file), curl determines the final URL and filename.
-  For URLs with opaque paths (for example, GitHub assets for Calibre),
-  the filename is obtained from Content-Disposition or the rscd and
-  response-content-disposition parameters. Files are downloaded only through aria2c.
+  If the original direct URL does not contain a filename,
+  curl determines the final URL and filename.
+  For script URLs, file or filename query parameters can supply the filename.
+  Metalink redirects are rejected. Files are downloaded only through aria2c.
+  Release filename parsing is shared by sorting, download planning and cleanup.
+  Recognized build date/hash suffixes are ignored for comparison only.
+  Ambiguous versions are treated as unversioned and are not removed by cleanup.
   After a successful download, cleanup is performed according to the corresponding rules.
   When file logging is enabled, each run overwrites its log file at startup after acquiring the file lock.
   Separate log files do not interfere with concurrent runs.
