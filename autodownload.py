@@ -28,7 +28,7 @@ if os.name != "nt":
     import fcntl
 
 DEBUG = False
-SCRIPT_VERSION = "2026.11.28.1"
+SCRIPT_VERSION = "2026.11.28.3"
 DEFAULT_DOWNLOAD_DIRECTORY = "/mnt/hdd1/shares/autodownloads/"
 workdir = os.path.abspath(os.path.expanduser(os.environ.get("AUTODOWNLOAD_DIR") or DEFAULT_DOWNLOAD_DIRECTORY))
 STAGING_DIRECTORY = os.path.join(workdir, ".autodownload-stage")
@@ -1519,6 +1519,257 @@ def create_plugin(filename="plugin"):
     sys.exit(0)
 
 
+def plugin_from_tui(values):
+    name = values["name"].strip().removesuffix(".json")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or name.endswith("."):
+        raise ValueError("Plugin name: use letters, digits, underscores, dots or hyphens")
+    source_type = int(values["type"])
+    if source_type not in (0, 1, 2, 3):
+        raise ValueError("Type must be 0, 1, 2 or 3")
+    url = values["url"].strip()
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or any(c.isspace() for c in url):
+        raise ValueError("URL must be a valid HTTP(S) URL")
+    raw_rules = values["rules"].strip()
+    if not raw_rules or raw_rules == "[]":
+        rules = []
+    elif re.match(r'^\[\s*"', raw_rules):
+        rules = json.loads(raw_rules)
+    else:
+        rules = [raw_rules]
+    if not isinstance(rules, list) or any(not isinstance(rule, str) or not rule for rule in rules):
+        raise ValueError("Rules must be a JSON array of non-empty regular expressions")
+    if source_type in (1, 3) and not rules:
+        raise ValueError("Rules are required for types 1 and 3")
+    for rule in rules:
+        re.compile(rule)
+    data = {"type": source_type, "url": url, "rules": rules}
+    if source_type in (1, 3):
+        tail = int(values["tail"])
+        if tail < 0:
+            raise ValueError("Tail must be non-negative")
+        data["tail"] = tail
+    if source_type == 2:
+        raw_path = values["path"].strip()
+        if raw_path.startswith("["):
+            path = json.loads(raw_path)
+        elif raw_path:
+            parts = raw_path.split(".")
+            if any(not part for part in parts):
+                raise ValueError("JSON path: use keys separated by dots, without empty keys")
+            path = [int(part) if re.fullmatch(r"[0-9]+", part) else part for part in parts]
+        else:
+            path = []
+        if not isinstance(path, list) or any(type(part) not in (str, int) for part in path):
+            raise ValueError("Path must be a JSON array of keys and integer indices")
+        data["path"] = path
+    if source_type == 3:
+        search_regex = values["search_regex"].strip()
+        if not search_regex:
+            raise ValueError("Search regex is required for type 3")
+        re.compile(search_regex)
+        data["search_regex"] = search_regex
+        for key, minimum in (("search_tail", 0), ("max_depth", 1), ("max_pages", 1)):
+            number = int(values[key])
+            if number < minimum:
+                raise ValueError(f"{key} must be at least {minimum}")
+            data[key] = number
+    out = values["out"].strip()
+    if out:
+        if sanitize_filename(out) != out or ntpath.basename(out) != out or out.lower().endswith((".lock", ".aria2")):
+            raise ValueError("Out must be a plain filename without a reserved suffix")
+        data["out"] = out
+    proxy = values["proxy"].strip()
+    if proxy:
+        if proxy.startswith("{"):
+            proxy = json.loads(proxy)
+            if not isinstance(proxy, dict) or any(not isinstance(value, str) for value in proxy.values()):
+                raise ValueError("Proxy must be a URL or a JSON object with string values")
+        data["proxy"] = proxy
+    aria2 = json.loads(values["aria2"] or "{}")
+    if not isinstance(aria2, dict) or any(not isinstance(value, (str, int, float, bool)) for value in aria2.values()):
+        raise ValueError("Aria2 must be a JSON object with scalar values")
+    if aria2:
+        data["aria2"] = aria2
+    redirect = values["resolve_redirect"].strip().lower()
+    if redirect not in ("true", "false"):
+        raise ValueError("Resolve redirect must be true or false")
+    if redirect == "true":
+        data["resolve_redirect"] = True
+    return name, data
+
+
+def save_tui_plugin(values):
+    name, data = plugin_from_tui(values)
+    text = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    os.makedirs(plugins_directory, exist_ok=True)
+    path = os.path.join(plugins_directory, name + ".json")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise ValueError("Plugin already exists; choose another name") from error
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as outfile:
+            outfile.write(text)
+    except OSError:
+        os.unlink(path)
+        raise
+    return path
+
+
+def create_plugin_tui():
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise RuntimeError("--create-tui requires an interactive terminal")
+    try:
+        import curses
+    except ImportError as error:
+        raise RuntimeError("--create-tui requires curses (on Windows: install windows-curses)") from error
+
+    from textwrap import wrap
+
+    source_types = ("Direct file", "Website / releases", "JSON API", "Recursive directory")
+    definitions = (
+        ("name", "Plugin name", "", "Required. Name of the JSON plugin, e.g. example."),
+        ("type", "Source type", "1", "Left/Right or 0-3: direct file, website/releases, JSON API or recursive directories."),
+        ("url", "Source URL", "", "Required. HTTP(S) address of the file, website, repository, directory or API."),
+        ("rules", "Filename regex", "", r"File matching and cleanup. Example: ^app-.*\.exe$ (no JSON escaping). Multiple rules: JSON array."),
+        ("tail", "Latest files", "1", "Number of latest matching files to download. 0 = all matches."),
+        ("path", "JSON path", "", "Keys separated by dots, e.g. architecture.64bit.url. Digits are indices; use a JSON array for literal keys."),
+        ("search_regex", "Directory regex", "", r"Required. Match subdirectories to visit, e.g. ^[0-9.]+/$ or ^(?:win|x64)/$."),
+        ("search_tail", "Latest directories", "0", "Number of latest matching directories per level. 0 = all."),
+        ("max_depth", "Max depth", "3", "Maximum number of directory levels to follow."),
+        ("max_pages", "Max pages", "100", "Maximum number of pages to scan."),
+        ("out", "Output filename", "", "Optional. Save using this local filename instead of the name from the URL."),
+        ("proxy", "Proxy", "", "Optional. Proxy URL, e.g. http://127.0.0.1:1080, or a JSON object."),
+        ("aria2", "Aria2 settings", "{}", 'Optional JSON object, e.g. {"split": 2, "timeout": 120}.'),
+        ("resolve_redirect", "Resolve redirect", "false", "true = resolve the final download URL before downloading; false = automatic."),
+    )
+    values = {key: default for key, _, default, _ in definitions}
+
+    def form(screen):
+        selected, cursor, top = 0, 0, 0
+        advanced = False
+        status = ""
+        while True:
+            source_type = int(values["type"])
+            keys = {"name", "type", "url", "rules"}
+            if source_type in (1, 3):
+                keys.add("tail")
+            if source_type == 2:
+                keys.add("path")
+            if source_type == 3:
+                keys.add("search_regex")
+            if advanced:
+                keys.update(("out", "proxy", "aria2", "resolve_redirect"))
+                if source_type == 3:
+                    keys.update(("search_tail", "max_depth", "max_pages"))
+            fields = [field for field in definitions if field[0] in keys]
+            selected = min(selected, len(fields) - 1)
+            height, width = screen.getmaxyx()
+            screen.erase()
+            if height < 12 or width < 60:
+                screen.addnstr(0, 0, "Resize terminal to 60x12 or press Esc", max(0, width - 1))
+                screen.refresh()
+                if screen.get_wch() == "\x1b":
+                    return None
+                continue
+            cols = min(width - 2, 100)
+            left = (width - cols) // 2
+            visible = min(len(fields), height - 8)
+            if selected < top:
+                top = selected
+            elif selected >= top + visible:
+                top = selected - visible + 1
+            top = min(top, len(fields) - visible)
+            label_width = 19
+            value_width = cols - label_width - 5
+            screen.addstr(0, left, "+" + "-" * (cols - 2) + "+")
+            heading = " Create plugin - " + ("Advanced" if advanced else "Basic") + " "
+            screen.addstr(1, left, "|" + heading.center(cols - 2) + "|")
+            for row, index in enumerate(range(top, top + visible), 2):
+                key, label, _, _ = fields[index]
+                value = values[key].encode("ascii", "replace").decode("ascii")
+                if key == "type":
+                    value = f"{source_type}: {source_types[source_type]}"
+                offset = max(0, cursor - value_width + 1) if index == selected and key != "type" else 0
+                screen.addstr(row, left, "| " + label.ljust(label_width))
+                screen.addstr(row, left + label_width + 2, value[offset:offset + value_width].ljust(value_width), curses.A_REVERSE if index == selected else curses.A_NORMAL)
+                screen.addstr(row, left + cols - 1, "|")
+            footer = visible + 2
+            screen.addstr(footer, left, "+" + "-" * (cols - 2) + "+")
+            key, _, _, hint = fields[selected]
+            if key == "rules" and source_type in (1, 3):
+                hint = "Required. " + hint
+            elif key == "rules":
+                hint = "Optional. " + hint
+            for row, line in enumerate(wrap(hint, cols)[:2], footer + 1):
+                screen.addnstr(row, left, line, cols)
+            screen.addnstr(footer + 3, left, "Tab/Arrows: move | F2 Save | F3 Options | Esc Cancel", cols)
+            for row, line in enumerate(wrap(status.encode("ascii", "replace").decode("ascii"), cols)[:2], footer + 4):
+                screen.addnstr(row, left, line, cols, curses.A_BOLD)
+            screen.move(selected - top + 2, left + label_width + 2 + (0 if key == "type" else min(cursor, value_width - 1)))
+            screen.refresh()
+            pressed = screen.get_wch()
+            value = values[key]
+            if pressed == "\x1b":
+                return None
+            if pressed == curses.KEY_F2:
+                try:
+                    return save_tui_plugin(values)
+                except (ValueError, OSError, re.error) as error:
+                    status = f"ERROR: {error}"
+                continue
+            if pressed == curses.KEY_F3:
+                advanced = not advanced
+                if not advanced:
+                    selected, cursor, top = 0, 0, 0
+                status = ""
+                continue
+            if pressed in ("\t", "\n", "\r", curses.KEY_ENTER, curses.KEY_DOWN, curses.KEY_UP, curses.KEY_BTAB):
+                direction = -1 if pressed in (curses.KEY_UP, curses.KEY_BTAB) else 1
+                selected = (selected + direction) % len(fields)
+                cursor = len(values[fields[selected][0]])
+            elif key == "type":
+                if pressed in ("0", "1", "2", "3"):
+                    values[key] = pressed
+                elif pressed in (curses.KEY_LEFT, curses.KEY_RIGHT):
+                    values[key] = str((source_type + (-1 if pressed == curses.KEY_LEFT else 1)) % len(source_types))
+                cursor = 0
+            elif pressed == curses.KEY_LEFT:
+                cursor = max(0, cursor - 1)
+            elif pressed == curses.KEY_RIGHT:
+                cursor = min(len(value), cursor + 1)
+            elif pressed == curses.KEY_HOME:
+                cursor = 0
+            elif pressed == curses.KEY_END:
+                cursor = len(value)
+            elif pressed in ("\b", "\x7f", curses.KEY_BACKSPACE):
+                if cursor:
+                    values[key] = value[:cursor - 1] + value[cursor:]
+                    cursor -= 1
+            elif pressed == curses.KEY_DC:
+                values[key] = value[:cursor] + value[cursor + 1:]
+            elif pressed == "\x15":
+                values[key] = ""
+                cursor = 0
+            elif isinstance(pressed, str) and pressed.isprintable():
+                values[key] = value[:cursor] + pressed + value[cursor:]
+                cursor += len(pressed)
+            status = ""
+
+    try:
+        path = curses.wrapper(form)
+    except KeyboardInterrupt:
+        print("INFO: Plugin creation cancelled")
+        return
+    except curses.error as error:
+        raise RuntimeError(f"Cannot open plugin TUI: {error}") from error
+    if path is None:
+        print("INFO: Plugin creation cancelled")
+    else:
+        print(f"New plugin created {path}")
+
+
 def edit_plugin(filename="plugin"):
     file_name = filename if filename.endswith(".json") else filename + ".json"
     file_path = os.path.join(plugins_directory, file_name)
@@ -1638,7 +1889,7 @@ def run_plugin_names(args):
         return ["__maintenance__"]
     if args.run is not None and all(args.run):
         return sorted({name.removesuffix(".json") for group in args.run for name in group})
-    if args.run is None and (args.create is not None or args.edit is not None or args.list):
+    if args.run is None and (args.create is not None or args.create_tui or args.edit is not None or args.list):
         return ["__maintenance__"]
     if not os.path.isdir(plugins_directory):
         return []
@@ -1680,7 +1931,9 @@ def run(args, plugin_names):
     global DEBUG
     if args.debug:
         DEBUG = True
-    if args.create is not None:
+    if args.create_tui:
+        create_plugin_tui()
+    elif args.create is not None:
         create_plugin(args.create)
     elif args.edit is not None:
         edit_plugin(args.edit)
@@ -1748,6 +2001,7 @@ Operating modes:
   Log serialization: Linux uses flock; Windows uses named mutexes.
   ./autodownload.py --list                   List plugin names
   ./autodownload.py --create [NAME]          Create a JSON template (default: plugin)
+  ./autodownload.py --create-tui             Create a plugin in an interactive terminal (F2 save, F3 options, Esc cancel)
   ./autodownload.py --edit [NAME]            Open JSON using $EDITOR (if set); create it if missing
   ./autodownload.py --clear                  Remove older versions using all plugin rules
   ./autodownload.py --clear NAME [NAME ...]  Remove older versions using only selected plugin rules
@@ -1857,6 +2111,7 @@ def main():
     parser.add_argument("-h", "--help", action="help", help="Show operating modes and plugin fields")
     parser.add_argument("--version", action="version", version=f"%(prog)s {SCRIPT_VERSION}")
     parser.add_argument("--create", nargs="?", const="plugin", help="Create a plugin")
+    parser.add_argument("--create-tui", action="store_true", help="Create a plugin in an interactive terminal")
     parser.add_argument("--edit", nargs="?", const="plugin", help="Edit a plugin")
     parser.add_argument("--clear", nargs="*", action="append", metavar="NAME", help="Remove older files for all or selected plugins")
     parser.add_argument("--run", nargs="*", action="append", metavar="NAME", help="Run all or selected plugins")
@@ -1870,9 +2125,11 @@ def main():
         help="Enable file logging at the specified path",
     )
     args = parser.parse_args()
+    if args.create_tui and (args.create is not None or args.edit is not None or args.clear is not None or args.run is not None or args.list or args.rename):
+        parser.error("--create-tui cannot be combined with another operating mode")
     try:
         configured_dir = os.environ.get("AUTODOWNLOAD_DIR", "").strip()
-        if os.name == "nt" and not configured_dir and not (args.list or args.create is not None or args.edit is not None):
+        if os.name == "nt" and not configured_dir and not (args.list or args.create is not None or args.create_tui or args.edit is not None):
             raise RuntimeError("Set AUTODOWNLOAD_DIR to a Windows path; the default directory is Linux-specific")
         if os.name != "nt" and (ntpath.splitdrive(configured_dir)[0] or configured_dir.startswith("\\\\")):
             raise RuntimeError("AUTODOWNLOAD_DIR contains a Windows path; use a mounted Linux path instead")
