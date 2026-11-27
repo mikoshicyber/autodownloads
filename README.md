@@ -2,7 +2,7 @@
 
 `autodownload.py` is a JSON plugin-based file downloader and updater for Linux and Windows. The script discovers current links to installers and other artifacts, downloads files using `aria2c`, resumes interrupted downloads, and removes older completed versions according to plugin rules.
 
-This documentation applies to script version **`2026.11.28.1`**.
+This documentation applies to script version **`2026.11.28.3`**.
 
 ## Features
 
@@ -111,6 +111,7 @@ The commands below assume Linux, `/scripts` as the current directory, and an exe
 | `./autodownload.py --run ollama --run blender` | Alternative syntax for multiple plugins |
 | `./autodownload.py --list` | List plugin names |
 | `./autodownload.py --create example` | Create the `plugins/example.json` template |
+| `./autodownload.py --create-tui` | Create a plugin using an interactive terminal form |
 | `./autodownload.py --edit example` | Open the plugin using `$EDITOR`, if set; create it if missing |
 | `./autodownload.py --clear` | Remove older completed versions using all plugin rules |
 | `./autodownload.py --clear farmanager` | Remove older versions using only the selected plugin rules |
@@ -132,9 +133,25 @@ AUTODOWNLOAD_LOG=1 ./autodownload.py --run ollama
 
 > **Warning:** `--clear` immediately removes matching older files. There is no separate `--dry-run` mode in this version. `--rename` also changes filenames in subdirectories of the download directory.
 
+### Interactive plugin creation
+
+```bash
+./autodownload.py --create-tui
+```
+
+The ASCII form uses Python's `curses` module and requires an interactive terminal of at least 60 columns and 12 rows. On Linux, no additional Python package is required when `curses` is available. On Windows, install the optional `windows-curses` package with `python -m pip install windows-curses`, then run `python autodownload.py --create-tui`. No download directory is required for plugin creation.
+
+- Basic mode shows only fields relevant to the selected source. Use Tab/Enter or Up/Down to select a field; Shift+Tab moves backward. Each selected field has a short explanation below the form. Select the source type using Left/Right or digits 0–3: direct file, website/releases, JSON API, or recursive directory.
+- Enter the plugin name, source URL and filename regex. A single regex is entered directly, e.g. `^app-.*\.exe$` (no JSON escaping). For multiple rules, a JSON array of strings is also accepted. Rules are required for types 1 and 3; for types 0 and 2 they are optional and used for cleanup. `Latest files` selects the number of matching files (0 = all) for types 1 and 3.
+- For type 2, enter a dotted JSON path such as `architecture.64bit.url`; numeric segments are array indices (e.g. `assets.0.url`). For literal numeric keys or keys containing dots, use a JSON array instead. An empty path selects the root. Type 3 also shows the required directory regex.
+- F3 toggles advanced settings: output filename, proxy (URL or JSON object), aria2 (JSON object), explicit redirect resolution and, for type 3, recursive search limits. Defaults are used unless changed; values entered in advanced mode are retained when it is hidden. Left/Right, Home/End, Backspace and Delete edit text; Ctrl+U clears a text field. The form scrolls automatically. Non-ASCII input is displayed as `?` but preserved in JSON.
+- F2 validates and saves a pretty-formatted JSON file in `plugins/NAME.json`. Existing files are never overwritten. Errors are displayed below the form. Esc or Ctrl+C cancels without saving. No editor, network request or download is started.
+
+`--create-tui` is a separate operating mode and cannot be combined with `--run`, `--clear`, `--create`, `--edit`, `--list` or `--rename`. File logging remains optional; the interactive screen and entered field values are not copied into the log.
+
 ### Bash completion
 
-The `autodownload.bash` file provides completion for all command-line options of `autodownload.py`, including `-h`, `--help`, `--version`, `--create`, `--edit`, `--clear`, `--run`, `--list`, `--debug`, `--log`, `--rename`, and `--log-file`. It requires Bash 4+ and GNU `readlink` (provided by `coreutils` on Linux). No Python process, plugin parsing, or network requests are required for completion.
+The `autodownload.bash` file provides completion for all command-line options of `autodownload.py`, including `-h`, `--help`, `--version`, `--create`, `--create-tui`, `--edit`, `--clear`, `--run`, `--list`, `--debug`, `--log`, `--rename`, and `--log-file`. It requires Bash 4+ and GNU `readlink` (provided by `coreutils` on Linux). No Python process, plugin parsing, or network requests are required for completion.
 
 To enable completion in the current Bash session:
 
